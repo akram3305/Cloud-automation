@@ -1,0 +1,406 @@
+﻿# -*- coding: utf-8 -*-
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from typing import Optional, List
+import json
+
+from database import get_db
+from models import User, VM, Request
+from routers.auth import get_current_user, require_admin, require_operator
+
+router = APIRouter(prefix="/requests", tags=["requests"])
+
+
+class CreateRequestPayload(BaseModel):
+    resource_name:      str
+    resource_type:      str = "ec2"
+    instance_type:      str = "t3.medium"
+    region:             str = "ap-south-1"
+    ami_id:             str = "ami-0c2af51e265bd5e0e"
+    subnet_id:          Optional[str] = None
+    security_group_ids: Optional[List[str]] = []
+    key_name:           Optional[str] = None
+    notes:              Optional[str] = None
+    tags:               Optional[dict] = {}
+
+
+class ApprovePayload(BaseModel):
+    note: Optional[str] = None
+
+
+class RejectPayload(BaseModel):
+    note: Optional[str] = None
+
+
+@router.get("")
+def list_requests(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    q = db.query(Request)
+    if user.role not in ["admin", "operator"]:
+        q = q.filter(Request.username == user.username)
+    reqs = q.order_by(Request.created_at.desc()).all()
+    result = []
+    for r in reqs:
+        payload = {}
+        try:
+            if r.payload:
+                payload = json.loads(r.payload)
+        except: pass
+        result.append({
+            "id":            r.id,
+            "username":      r.username,
+            "resource_name": r.resource_name,
+            "resource_type": r.resource_type,
+            "status":        r.status,
+            "approved_by":   r.approved_by,
+            "instance_id":   r.instance_id,
+            "created_at":    str(r.created_at),
+            "region":        payload.get("region", ""),
+            "instance_type": payload.get("instance_type", ""),
+            "ami_id":        payload.get("ami_id", ""),
+            "key_name":      payload.get("key_name", ""),
+            "subnet_id":     payload.get("subnet_id", ""),
+            "tags":          payload.get("tags", {}),
+            "payload":       r.payload,
+        })
+    return result
+
+
+@router.post("")
+def create_request(
+    body: CreateRequestPayload,
+    db:   Session = Depends(get_db),
+    user: User    = Depends(require_operator)
+):
+    payload = json.dumps({
+        "region":             body.region,
+        "ami_id":             body.ami_id,
+        "instance_type":      body.instance_type,
+        "subnet_id":          body.subnet_id,
+        "security_group_ids": body.security_group_ids or [],
+        "key_name":           body.key_name,
+        "tags":               body.tags or {},
+    })
+
+    req = Request(
+        username      = user.username,
+        resource_name = body.resource_name,
+        resource_type = body.resource_type,
+        status        = "pending",
+        payload       = payload,
+        subnet_id     = body.subnet_id,
+        security_groups = json.dumps(body.security_group_ids or []),
+        key_name      = body.key_name,
+        ami_id        = body.ami_id,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    return {"id": req.id, "status": req.status, "message": "Request submitted — pending admin approval"}
+
+
+@router.patch("/{request_id}/approve")
+def approve_request(
+    request_id:       int,
+    body:             ApprovePayload = ApprovePayload(),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db:               Session = Depends(get_db),
+    admin:            User    = Depends(require_admin)
+):
+    """
+    Approve a request — runs terraform apply via terraform router logic
+    """
+    req = db.query(Request).filter(Request.id == request_id).first()
+    if not req:
+        raise HTTPException(404, "Request not found")
+    if req.status not in ["pending", "plan_ready"]:
+        raise HTTPException(400, f"Cannot approve — status is '{req.status}'")
+
+    req.status      = "provisioning"
+    req.approved_by = admin.username
+    db.commit()
+
+    def do_terraform_apply():
+        """
+        Full automated Terraform pipeline:
+        1. Generate .tf file
+        2. terraform init
+        3. terraform validate
+        4. terraform plan
+        5. terraform apply
+        6. Save resource to DB
+        """
+        from database import SessionLocal
+        from services.terraform_service import (
+            generate_ec2_tf, generate_s3_tf, generate_vpc_tf,
+            generate_sg_tf, generate_keypair_tf,
+            run_terraform, get_outputs
+        )
+        import pathlib as _pl, json as _json, shutil as _shutil
+        from datetime import datetime
+
+        GENERATORS = {
+            "ec2":     generate_ec2_tf,
+            "vm":      generate_ec2_tf,
+            "s3":      generate_s3_tf,
+            "vpc":     generate_vpc_tf,
+            "sg":      generate_sg_tf,
+            "keypair": generate_keypair_tf,
+        }
+
+        db2  = SessionLocal()
+        req2 = db2.query(Request).filter(Request.id == request_id).first()
+
+        def update_status(status, reason=None):
+            req2.status = status
+            if reason:
+                req2.reject_reason = reason[:400]
+            db2.commit()
+            print(f"[req_{request_id}] STATUS -> {status}" + (f" | {reason[:100]}" if reason else ""))
+
+        try:
+            # ── Parse payload ─────────────────────────────────────
+            payload = {}
+            try:
+                payload = _json.loads(req2.payload or "{}")
+            except Exception as pe:
+                print(f"[req_{request_id}] Payload parse error: {pe}")
+
+            payload["resource_name"] = req2.resource_name
+            payload["username"]      = req2.username
+
+            env = str(payload.get("tags", {}).get("environment", "dev")).lower().strip()
+            if env not in ["dev", "staging", "prod"]:
+                env = "dev"
+
+            resource_type = req2.resource_type
+
+            # Delete stale S3 state before terraform init
+            from services.terraform_service import delete_s3_state
+            delete_s3_state(request_id, resource_type, env)
+
+            # Delete local .terraform/terraform.tfstate cache (prevents checksum mismatch)
+            import pathlib as _pl3
+            _cache = (_pl3.Path(r"D:\AWS_Terraform_automation\terraform-infra\environments")
+                      / env / "aionos" / f"req_{request_id}" / ".terraform" / "terraform.tfstate")
+            if _cache.exists():
+                _cache.unlink()
+                print(f"[req_{request_id}] Deleted local backend cache")
+            print(f"\n[req_{request_id}] {'='*50}")
+            print(f"[req_{request_id}] Starting Terraform pipeline")
+            print(f"[req_{request_id}] Resource: {req2.resource_name} ({resource_type})")
+            print(f"[req_{request_id}] Environment: {env}")
+            print(f"[req_{request_id}] {'='*50}")
+
+            # ── Get correct generator ──────────────────────────────
+            gen_fn = GENERATORS.get(resource_type)
+            if not gen_fn:
+                update_status("failed", f"Unknown resource type: {resource_type}")
+                return
+
+            # ── STEP 1: Generate Terraform file ───────────────────
+            update_status("generating")
+            print(f"[req_{request_id}] STEP 1/5: Generating Terraform configuration...")
+
+            BASE_PATH = _pl.Path(r"D:\AWS_Terraform_automation\terraform-infra")
+            ws = BASE_PATH / f"environments/{env}/aionos/req_{request_id}"
+
+            # Keep .terraform dir (has downloaded providers) - only clean config files
+            ws.mkdir(parents=True, exist_ok=True)
+            for f in ['main.tf', 'tfplan']:
+                fp = ws / f
+                if fp.exists():
+                    fp.unlink()
+
+            try:
+                tf_file = gen_fn(request_id, payload)
+                tf_text = _pl.Path(tf_file).read_text(encoding="utf-8")
+                print(f"[req_{request_id}] Generated: {tf_file} ({len(tf_text)} bytes)")
+            except Exception as e:
+                update_status("failed", f"TF generation failed: {str(e)}")
+                return
+
+            # Verify correct module
+            expected = {"s3": 'module "s3"', "vpc": 'module "vpc"',
+                       "ec2": 'module "ec2"', "vm": 'module "ec2"',
+                       "keypair": 'module "keypair"'}
+            if resource_type in expected and expected[resource_type] not in tf_text:
+                update_status("failed", f"Wrong TF content for {resource_type}")
+                return
+
+            # ── STEP 2: terraform init ─────────────────────────────
+            # Skip init if providers already downloaded
+            # ── STEP 2: terraform init ─────────────────────────────────
+            # ── STEP 2: terraform init ───────────────────────────────────────
+            # SKIPPED: providers + modules + lockfile pre-cached in workspace
+            # For new workspaces, copy cache from template workspace (req_16)
+            import pathlib as _pl, shutil as _sh
+
+            _ws_path   = _pl.Path(str(ws))
+            _tf_dir    = _ws_path / ".terraform"
+            _providers = _tf_dir / "providers"
+            _modules   = _tf_dir / "modules"
+            _lockfile  = _ws_path / ".terraform.lock.hcl"
+
+            _TEMPLATE  = _pl.Path(
+                r"D:\AWS_Terraform_automation\terraform-infra"
+                r"\environments\dev\aionos\req_16"
+            )
+
+            _need_copy = (
+                not (_providers.exists() and any(_providers.rglob("*.exe")))
+                or not _modules.exists()
+                or not _lockfile.exists()
+                or (_lockfile.exists() and "placeholder" in _lockfile.read_text(encoding="utf-8"))
+            )
+
+            if _need_copy and _TEMPLATE.exists():
+                print(f"[req_{request_id}] Copying provider cache from template...")
+                # Copy providers
+                _src_prov = _TEMPLATE / ".terraform" / "providers"
+                if _src_prov.exists() and not (_providers.exists() and any(_providers.rglob("*.exe"))):
+                    if _providers.exists():
+                        _sh.rmtree(str(_providers))
+                    _sh.copytree(str(_src_prov), str(_providers))
+                    print(f"[req_{request_id}]   providers copied")
+                # Copy modules
+                _src_mods = _TEMPLATE / ".terraform" / "modules"
+                if _src_mods.exists() and not _modules.exists():
+                    _sh.copytree(str(_src_mods), str(_modules))
+                    print(f"[req_{request_id}]   modules copied")
+                # Copy lock file
+                _src_lock = _TEMPLATE / ".terraform.lock.hcl"
+                if _src_lock.exists():
+                    _sh.copy2(str(_src_lock), str(_lockfile))
+                    print(f"[req_{request_id}]   lock file copied")
+
+            update_status("initializing")
+            print(f"[req_{request_id}] STEP 2/5: terraform init SKIPPED (fully cached)")
+
+            # ── STEP 3: terraform validate ────────────────────────
+            # terraform validate SKIPPED - redundant after successful init
+            print(f"[req_{request_id}] STEP 3/5: validate SKIPPED (saves 3-5s)")
+            # ── STEP 4: terraform plan ────────────────────────────
+            update_status("planning")
+            print(f"[req_{request_id}] STEP 4/5: terraform plan...")
+
+            plan = run_terraform(request_id, "plan", env)
+            if not plan["success"]:
+                err = (plan.get("error") or plan.get("output") or "plan failed")
+                update_status("plan_failed", f"terraform plan failed: {err[:300]}")
+                return
+
+            # Show plan summary
+            plan_out = plan.get("output", "")
+            for line in plan_out.splitlines():
+                if any(x in line for x in ["to add", "to change", "to destroy", "Plan:"]):
+                    print(f"[req_{request_id}] Plan: {line.strip()}")
+            print(f"[req_{request_id}] terraform plan: OK")
+
+            # ── STEP 5: terraform apply ───────────────────────────
+            update_status("provisioning")
+            print(f"[req_{request_id}] STEP 5/5: terraform apply...")
+
+            apply = run_terraform(request_id, "apply", env)
+
+            if apply["success"]:
+                outputs = get_outputs(request_id, env)
+                print(f"[req_{request_id}] terraform apply: OK")
+                print(f"[req_{request_id}] Outputs: {outputs}")
+
+                # ── Save resource to DB ───────────────────────────
+                req2.status = "completed"
+
+                if resource_type in ["ec2", "vm"]:
+                    req2.instance_id = outputs.get("instance_id", "")
+                    try:
+                        from models.vm import VM
+                        vm = VM(
+                            name           = req2.resource_name,
+                            instance_id    = outputs.get("instance_id", ""),
+                            instance_type  = payload.get("instance_type", "t3.micro"),
+                            ami_id         = payload.get("ami_id", ""),
+                            region         = payload.get("region", "ap-south-1"),
+                            state          = "running",
+                            owner_id       = 1,
+                            owner_username = req2.username,
+                            public_ip      = outputs.get("public_ip"),
+                            start_time     = datetime.utcnow(),
+                        )
+                        db2.add(vm)
+                        print(f"[req_{request_id}] VM saved: {vm.name} ({vm.instance_id})")
+                    except Exception as ve:
+                        print(f"[req_{request_id}] VM save error: {ve}")
+
+                elif resource_type == "s3":
+                    req2.instance_id = outputs.get("bucket_name", req2.resource_name)
+                    print(f"[req_{request_id}] S3 bucket created: {req2.instance_id}")
+
+                elif resource_type == "vpc":
+                    req2.instance_id = outputs.get("vpc_id", "")
+                    print(f"[req_{request_id}] VPC created: {req2.instance_id}")
+
+                elif resource_type == "keypair":
+                    req2.instance_id = outputs.get("key_name", req2.resource_name)
+                    print(f"[req_{request_id}] Keypair created: {req2.instance_id}")
+
+                db2.commit()
+                print(f"[req_{request_id}] {'='*50}")
+                print(f"[req_{request_id}] PIPELINE COMPLETE - Resource created successfully")
+                print(f"[req_{request_id}] {'='*50}\n")
+
+            else:
+                err = (apply.get("error") or apply.get("output") or "apply failed")
+                update_status("failed", err[:500])
+                print(f"[req_{request_id}] terraform apply FAILED: {err[:300]}")
+
+        except Exception as e:
+            import traceback
+            update_status("failed", str(e)[:400])
+            print(f"[req_{request_id}] PIPELINE EXCEPTION: {e}")
+            traceback.print_exc()
+        finally:
+            db2.close()
+
+    background_tasks.add_task(do_terraform_apply)
+    return {"message": "Terraform apply started", "request_id": request_id}
+
+
+@router.patch("/{request_id}/reject")
+def reject_request(
+    request_id: int,
+    body:       RejectPayload = RejectPayload(),
+    db:         Session = Depends(get_db),
+    admin:      User    = Depends(require_admin)
+):
+    req = db.query(Request).filter(Request.id == request_id).first()
+    if not req:
+        raise HTTPException(404, "Request not found")
+    req.status        = "rejected"
+    req.approved_by   = admin.username
+    req.reject_reason = body.note or "Rejected by admin"
+    db.commit()
+    return {"message": "Request rejected", "request_id": request_id}
+
+
+@router.get("/{request_id}")
+def get_request(request_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    req = db.query(Request).filter(Request.id == request_id).first()
+    if not req:
+        raise HTTPException(404, "Not found")
+    payload = {}
+    try:
+        payload = json.loads(req.payload or "{}")
+    except: pass
+    return {
+        "id":            req.id,
+        "username":      req.username,
+        "resource_name": req.resource_name,
+        "resource_type": req.resource_type,
+        "status":        req.status,
+        "approved_by":   req.approved_by,
+        "instance_id":   req.instance_id,
+        "reject_reason": req.reject_reason,
+        "created_at":    str(req.created_at),
+        "payload":       payload,
+    }

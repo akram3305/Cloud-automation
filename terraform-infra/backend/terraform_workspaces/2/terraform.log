@@ -1,0 +1,23 @@
+
+============================================================
+$ terraform init -upgrade
+============================================================
+Initializing the backend...
+Initializing provider plugins...
+- Finding hashicorp/tls versions matching "~> 4.0"...
+- Finding hashicorp/aws versions matching "~> 5.0"...
+- Installing hashicorp/tls v4.2.1...
+- Installed hashicorp/tls v4.2.1 (signed by HashiCorp)
+
+Error: Failed to query available provider packages
+
+Could not retrieve the list of available versions for provider hashicorp/aws:
+could not query provider registry for registry.terraform.io/hashicorp/aws:
+context deadline exceeded (Client.Timeout or context cancellation while
+reading body)
+
+To see which modules are currently depending on hashicorp/aws and what
+versions are specified, run the following command:
+    terraform providers
+
+ERROR: terraform init failed

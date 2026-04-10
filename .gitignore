@@ -1,0 +1,36 @@
+﻿# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+terraform.tfplan
+.terraformrc
+
+# Python
+__pycache__/
+*.pyc
+venv/
+*.egg-info/
+
+# Secrets
+.env
+*.pem
+*.key
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Terraform
+*.tfstate.*
+.terraform.lock.hcl
+
+# Cache
+terraform_cache/
+plugin-cache/

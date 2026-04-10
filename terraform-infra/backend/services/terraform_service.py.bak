@@ -1,0 +1,489 @@
+# -*- coding: utf-8 -*-
+import os, json, subprocess
+from pathlib import Path
+
+TERRAFORM_BIN  = "terraform"
+STATE_BUCKET   = "aionos-terraform-state-3305"
+STATE_REGION   = "ap-south-1"
+DYNAMO_TABLE   = "terraform-lock"
+
+TF_PROJECT  = Path(r"D:\AWS_Terraform_automation\terraform-infra")
+TF_ENVS = {
+    "dev":     TF_PROJECT / "environments" / "dev"     / "aionos",
+    "staging": TF_PROJECT / "environments" / "staging" / "aionos",
+    "prod":    TF_PROJECT / "environments" / "prod"    / "aionos",
+}
+
+TF_MOD_EC2 = "../../../../modules/compute/ec2"
+TF_MOD_VPC = "../../../../modules/vpc"
+TF_MOD_SG  = "../../../../modules/security_group"
+TF_MOD_S3  = "../../../../modules/S3"
+TF_MOD_KEY = "../../../../modules/keypair"
+
+# AWS credentials from .aws/credentials
+import os as _os
+from dotenv import load_dotenv as _load_dotenv
+_load_dotenv()
+AWS_ACCESS_KEY = _os.getenv("AWS_ACCESS_KEY_ID", "")
+AWS_SECRET_KEY = _os.getenv("AWS_SECRET_ACCESS_KEY", "")
+STATE_BUCKET   = _os.getenv("TF_STATE_BUCKET", "aionos-terraform-state-3305")
+DYNAMO_TABLE   = _os.getenv("TF_DYNAMO_TABLE", "terraform-lock")
+
+
+def get_workspace(request_id: int, environment: str = "dev") -> Path:
+    env = environment.lower()
+    if env not in TF_ENVS:
+        env = "dev"
+    ws = TF_ENVS[env] / f"req_{request_id}"
+    ws.mkdir(parents=True, exist_ok=True)
+    return ws
+
+
+def _provider_block(region: str) -> str:
+    return f"""
+provider "aws" {{
+  region = "{region}"
+  # Credentials from environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+  # set by run_terraform() — never hardcode credentials in .tf files
+}}
+"""
+
+
+def _required_providers_block(state_key: str) -> str:
+    return f"""
+terraform {{
+  required_providers {{
+    aws = {{
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }}
+    tls = {{
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }}
+    local = {{
+      source  = "hashicorp/local"
+      version = "~> 2.0"
+    }}
+    random = {{
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }}
+  }}"
+    key            = "{state_key}"
+    region         = "{STATE_REGION}"
+    dynamodb_table = "{DYNAMO_TABLE}"
+    encrypt        = true
+    # Credentials from env vars — never hardcode in backend config
+  }}
+}}
+"""
+
+
+def generate_ec2_tf(request_id: int, config: dict) -> str:
+    name          = config.get("resource_name", "my-ec2")
+    region        = config.get("region", "ap-south-1")
+    instance_type = config.get("instance_type", "t3.medium")
+    ami_id        = config.get("ami_id", "ami-0c2af51e265bd5e0e")
+    subnet_id     = config.get("subnet_id", "")
+    key_name      = config.get("key_name", "")
+    sgs           = config.get("security_group_ids", [])
+    tags          = config.get("tags", {})
+    username      = config.get("username", "aionos")
+    environment   = tags.get("environment", "dev").lower()
+    sg_json       = json.dumps(sgs) if sgs else "[]"
+
+    tf = _required_providers_block(f"{environment}/ec2/req_{request_id}/terraform.tfstate")
+    tf += _provider_block(region)
+    tf += f"""
+module "ec2" {{
+  source = "{TF_MOD_EC2}"
+
+  environment = "{environment}"
+
+  instances = {{
+    "{name}" = {{
+      ami                    = "{ami_id}"
+      instance_type          = "{instance_type}"
+      subnet_id              = "{subnet_id}"
+      vpc_security_group_ids = {sg_json}
+      key_name               = "{key_name}"
+
+      associate_public_ip_address       = true
+      monitoring                        = false
+      disable_api_termination           = false
+
+      root_volume_type                  = "gp3"
+      root_volume_size                  = 20
+      root_volume_delete_on_termination = true
+      root_volume_encrypted             = false
+
+      metadata_http_endpoint  = "enabled"
+      metadata_http_tokens    = "optional"
+      metadata_http_hop_limit = 1
+      metadata_instance_tags  = "enabled"
+
+      tags = {{
+        Project     = "{tags.get("project", "")}"
+        Owner       = "{tags.get("owner", "")}"
+        Environment = "{environment}"
+        CreatedBy   = "AIonOS-Platform"
+        ManagedBy   = "{username}"
+        RequestID   = "{request_id}"
+      }}
+    }}
+  }}
+}}
+
+output "instance_id" {{ value = try(values(module.ec2.instance_ids)[0], "") }}
+output "public_ip"   {{ value = try(values(module.ec2.public_ips)[0], "") }}
+output "private_ip"  {{ value = try(values(module.ec2.private_ips)[0], "") }}
+"""
+    ws = get_workspace(request_id, environment)
+    (ws / "main.tf").write_text(tf, encoding="utf-8")
+    return str(ws / "main.tf")
+
+
+def generate_vpc_tf(request_id: int, config: dict) -> str:
+    name        = config.get("name", "my-vpc")
+    region      = config.get("region", "ap-south-1")
+    cidr        = config.get("cidr", "10.0.0.0/16")
+    subnets     = config.get("subnets", [])
+    tags        = config.get("tags", {})
+    username    = config.get("username", "aionos")
+    environment = tags.get("environment", "dev").lower()
+    create_nat  = config.get("create_nat", False)
+
+    public_subs  = [s["cidr"] for s in subnets if s.get("public", False)]
+    private_subs = [s["cidr"] for s in subnets if not s.get("public", False)]
+    azs = list(set(s.get("az", "ap-south-1a") for s in subnets)) or ["ap-south-1a", "ap-south-1b"]
+
+    tf = _required_providers_block(f"{environment}/vpc/req_{request_id}/terraform.tfstate")
+    tf += _provider_block(region)
+    tf += f"""
+module "vpc" {{
+  source = "{TF_MOD_VPC}"
+
+  vpc_name           = "{name}"
+  vpc_cidr           = "{cidr}"
+  availability_zones = {json.dumps(azs)}
+  public_subnets     = {json.dumps(public_subs)}
+  private_subnets    = {json.dumps(private_subs)}
+
+  enable_nat_gateway     = {str(create_nat).lower()}
+  single_nat_gateway     = true
+  one_nat_gateway_per_az = false
+  enable_flow_logs       = false
+
+  environment = "{environment}"
+  tags = {{
+    Project     = "{tags.get("project", "")}"
+    Owner       = "{tags.get("owner", "")}"
+    Environment = "{environment}"
+    CreatedBy   = "AIonOS-Platform"
+    ManagedBy   = "{username}"
+  }}
+}}
+
+output "vpc_id"          {{ value = module.vpc.vpc_id }}
+output "public_subnets"  {{ value = module.vpc.public_subnet_ids }}
+output "private_subnets" {{ value = module.vpc.private_subnet_ids }}
+"""
+    ws = get_workspace(request_id, environment)
+    (ws / "main.tf").write_text(tf, encoding="utf-8")
+    return str(ws / "main.tf")
+
+
+def generate_s3_tf(request_id: int, config: dict) -> str:
+    name        = config.get("name", config.get("resource_name", "my-bucket"))
+    region      = config.get("region", "ap-south-1")
+    tags        = config.get("tags", {})
+    username    = config.get("username", "aionos")
+    environment = tags.get("environment", "dev").lower()
+    versioning  = str(config.get("versioning", False)).lower()
+    encryption  = config.get("encryption", "AES256")
+
+    tf = _required_providers_block(f"{environment}/s3/req_{request_id}/terraform.tfstate")
+    tf += _provider_block(region)
+    tf += f"""
+module "s3" {{
+  source = "{TF_MOD_S3}"
+
+  bucket_name        = "{name}"
+  force_destroy      = false
+  versioning_enabled = {versioning}
+  encryption_type    = "{encryption}"
+  bucket_key_enabled = true
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+
+  tags = {{
+    Project     = "{tags.get("project", "")}"
+    Owner       = "{tags.get("owner", "")}"
+    Environment = "{environment}"
+    CreatedBy   = "AIonOS-Platform"
+    ManagedBy   = "{username}"
+  }}
+}}
+
+output "bucket_name" {{ value = module.s3.bucket_name }}
+output "bucket_arn"  {{ value = module.s3.bucket_arn }}
+"""
+    ws = get_workspace(request_id, environment)
+    (ws / "main.tf").write_text(tf, encoding="utf-8")
+    return str(ws / "main.tf")
+
+
+def generate_sg_tf(request_id: int, config: dict) -> str:
+    name        = config.get("name", config.get("resource_name", "my-sg"))
+    vpc_id      = config.get("vpc_id", "")
+    region      = config.get("region", "ap-south-1")
+    tags        = config.get("tags", {})
+    username    = config.get("username", "aionos")
+    environment = tags.get("environment", "dev").lower()
+    rules_in    = config.get("rules_in", [])
+    description = config.get("description", "Managed by AIonOS Platform")
+
+    ingress_hcl = ""
+    for r in rules_in:
+        ingress_hcl += f"""
+        {{
+          description = "{r.get("desc","")}"
+          from_port   = {r.get("from_port", 0)}
+          to_port     = {r.get("to_port", r.get("from_port", 0))}
+          protocol    = "{r.get("protocol","tcp")}"
+          cidr_blocks = ["{r.get("cidr","0.0.0.0/0")}"]
+        }},"""
+
+    tf = _required_providers_block(f"{environment}/sg/req_{request_id}/terraform.tfstate")
+    tf += _provider_block(region)
+    tf += f"""
+module "security_groups" {{
+  source = "{TF_MOD_SG}"
+
+  environment = "{environment}"
+
+  security_groups = {{
+    "{name}" = {{
+      name        = "{name}"
+      description = "{description}"
+      vpc_id      = "{vpc_id}"
+      ingress_rules = [{ingress_hcl}
+      ]
+      egress_rules = [
+        {{
+          description = "Allow all outbound"
+          from_port   = 0
+          to_port     = 0
+          protocol    = "-1"
+          cidr_blocks = ["0.0.0.0/0"]
+        }}
+      ]
+      tags = {{
+        Project     = "{tags.get("project","")}"
+        Owner       = "{tags.get("owner","")}"
+        Environment = "{environment}"
+        CreatedBy   = "AIonOS-Platform"
+      }}
+    }}
+  }}
+}}
+
+output "sg_id" {{ value = try(module.security_groups.security_group_ids["{name}"], "") }}
+"""
+    ws = get_workspace(request_id, environment)
+    (ws / "main.tf").write_text(tf, encoding="utf-8")
+    return str(ws / "main.tf")
+
+
+def _keypair_providers_block(state_key: str) -> str:
+    """Keypair needs tls + random + local providers"""
+    return f"""
+terraform {{
+  required_providers {{
+    aws = {{
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }}
+  }}"
+    key            = "{state_key}"
+    region         = "{STATE_REGION}"
+    dynamodb_table = "{DYNAMO_TABLE}"
+    encrypt        = true
+  }}
+}}
+"""
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def generate_keypair_tf(request_id: int, config: dict) -> str:
+    name        = config.get("name", config.get("resource_name", "my-keypair"))
+    region      = config.get("region", "ap-south-1")
+    tags        = config.get("tags", {})
+    username    = config.get("username", "aionos")
+    environment = tags.get("environment", "dev").lower()
+    save_path   = r"C:/Users/Akram.Khan/Downloads"
+
+    tf = _keypair_providers_block(f"{environment}/keypair/req_{request_id}/terraform.tfstate")
+    tf += _provider_block(region)
+    tf += f"""
+module "keypair" {{
+  source = "{TF_MOD_KEY}"
+
+  generate_new_key = true
+  key_name         = "{name}"
+  rsa_bits         = 4096
+  save_locally     = true
+  local_key_path   = "{save_path}"
+  environment      = "{environment}"
+
+  tags = {{
+    Project     = "{tags.get("project","")}"
+    Owner       = "{tags.get("owner","")}"
+    Environment = "{environment}"
+    CreatedBy   = "AIonOS-Platform"
+    ManagedBy   = "{username}"
+  }}
+}}
+
+output "key_name"         {{ value = module.keypair.key_name }}
+output "private_key_path" {{ value = module.keypair.private_key_path }}
+"""
+    ws = get_workspace(request_id, environment)
+    (ws / "main.tf").write_text(tf, encoding="utf-8")
+    return str(ws / "main.tf")
+
+
+
+def clear_stale_state(request_id: int, environment: str = "dev"):
+    """Delete stale terraform state so apply starts fresh"""
+    ws = get_workspace(request_id, environment)
+    # Remove local state cache files that cause 'couldn't find resource'
+    for fname in [".terraform/terraform.tfstate", "terraform.tfstate", "terraform.tfstate.backup", "tfplan"]:
+        fp = ws / fname
+        if fp.exists():
+            fp.unlink()
+            print(f"  Deleted stale: {fname}")
+
+
+
+def delete_s3_state(request_id: int, resource_type: str, environment: str = "dev"):
+    """Delete stale Terraform state from S3 before apply to avoid refresh conflicts"""
+    try:
+        import boto3 as _b3
+        s3 = _b3.client("s3", region_name=STATE_REGION,
+                         aws_access_key_id=AWS_ACCESS_KEY,
+                         aws_secret_access_key=AWS_SECRET_KEY)
+
+        # Build state key matching _required_providers_block pattern
+        type_map = {"ec2":"ec2","vm":"ec2","s3":"s3","vpc":"vpc","sg":"sg","keypair":"keypair","iam_role":"iam"}
+        tf_type = type_map.get(resource_type, resource_type)
+        key = f"{environment}/{tf_type}/req_{request_id}/terraform.tfstate"
+
+        try:
+            s3.delete_object(Bucket=STATE_BUCKET, Key=key)
+            print(f"[req_{request_id}] Deleted stale S3 state: {key}")
+        except Exception:
+            pass  # State may not exist yet - that's fine
+
+        # Also delete DynamoDB lock if stuck
+        try:
+            ddb = _b3.client("dynamodb", region_name=STATE_REGION,
+                              aws_access_key_id=AWS_ACCESS_KEY,
+                              aws_secret_access_key=AWS_SECRET_KEY)
+            lock_id = f"{STATE_BUCKET}/{key}"
+            ddb.delete_item(
+                TableName=DYNAMO_TABLE,
+                Key={"LockID": {"S": lock_id}}
+            )
+            print(f"[req_{request_id}] Cleared DynamoDB lock: {lock_id}")
+        except Exception:
+            pass
+
+    except Exception as e:
+        print(f"[req_{request_id}] State cleanup warning: {e}")
+
+
+def run_terraform(request_id: int, action: str, environment: str = "dev") -> dict:
+    ws  = get_workspace(request_id, environment)
+    env = os.environ.copy()
+    env["AWS_ACCESS_KEY_ID"]     = AWS_ACCESS_KEY
+    env["AWS_SECRET_ACCESS_KEY"] = AWS_SECRET_KEY
+    env["AWS_DEFAULT_REGION"]    = "ap-south-1"
+    env["AWS_REGION"]            = "ap-south-1"
+    # TF_CLI_ARGS_init handled in cmd_map
+    env.pop("AWS_PROFILE", None)
+    env.pop("AWS_SESSION_TOKEN", None)
+    env["CHECKPOINT_DISABLE"] = "1"
+    env["TF_PLUGIN_CACHE_DIR"]   = str(
+        Path(r"D:\AWS_Terraform_automation\terraform-infra\terraform_cache\providers")
+    )
+
+    cmd_map = {
+        "init":    [TERRAFORM_BIN, "init",    "-no-color", "-upgrade=false", "-reconfigure", "-input=false", "-lockfile=readonly"],
+        "validate": [TERRAFORM_BIN, "validate", "-no-color"],
+        "plan":    [TERRAFORM_BIN, "plan",    "-no-color", "-out=tfplan", "-parallelism=20"],
+        "apply":   [TERRAFORM_BIN, "apply",   "-no-color", "-auto-approve", "-parallelism=20", "-refresh=true"],
+        "destroy": [TERRAFORM_BIN, "destroy", "-no-color", "-auto-approve", "-parallelism=20", "-input=false", "-compact-warnings"],
+        "output":  [TERRAFORM_BIN, "output",  "-json"],
+    }
+    cmd = cmd_map.get(action)
+    if not cmd:
+        return {"success": False, "output": "", "error": f"Unknown action: {action}"}
+
+    try:
+        result = subprocess.run(
+            cmd, cwd=str(ws), env=env,
+            capture_output=True, text=True, timeout=600
+        )
+        return {
+            "success": result.returncode == 0,
+            "output":  result.stdout,
+            "error":   result.stderr if result.returncode != 0 else "",
+        }
+    except FileNotFoundError:
+        return {"success": False, "output": "", "error": "Terraform not installed"}
+    except subprocess.TimeoutExpired:
+        return {"success": False, "output": "", "error": "Terraform timed out"}
+    except Exception as e:
+        return {"success": False, "output": "", "error": str(e)}
+
+
+def get_outputs(request_id: int, environment: str = "dev") -> dict:
+    result = run_terraform(request_id, "output", environment)
+    if result["success"]:
+        try:
+            data = json.loads(result["output"])
+            return {k: v["value"] for k, v in data.items()}
+        except:
+            pass
+    return {}
+
+
+def generate_tf_for_request(request_id: int, resource_type: str, config: dict) -> str:
+    generators = {
+        "ec2":     generate_ec2_tf,
+        "vm":      generate_ec2_tf,
+        "vpc":     generate_vpc_tf,
+        "sg":      generate_sg_tf,
+        "s3":      generate_s3_tf,
+        "keypair": generate_keypair_tf,
+    }
+    gen = generators.get(resource_type)
+    if not gen:
+        raise ValueError(f"No generator for: {resource_type}")
+    return gen(request_id, config)
