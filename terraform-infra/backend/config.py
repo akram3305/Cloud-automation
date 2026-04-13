@@ -29,6 +29,12 @@ MODULES_PATH        = os.getenv("MODULES_PATH", "/home/claude/platform/modules")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")       # empty = skip Slack
 SES_FROM_EMAIL    = os.getenv("SES_FROM_EMAIL", "")          # empty = skip email
 
+# ── Terraform State ───────────────────────────────────────────
+TF_STATE_BUCKET = os.getenv("TF_STATE_BUCKET",  "aionos-terraform-state-3305")
+TF_STATE_REGION = os.getenv("TF_STATE_REGION",  "ap-south-1")
+AWS_ACCESS_KEY  = os.getenv("AWS_ACCESS_KEY_ID", "")
+AWS_SECRET_KEY  = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+
 # ── CORS ──────────────────────────────────────────────────────
 ALLOWED_ORIGINS = [
     "http://localhost:5173",

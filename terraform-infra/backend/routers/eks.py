@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 import boto3
+import json
 from botocore.exceptions import ClientError
 
 from models import User
@@ -20,7 +21,7 @@ REGIONS = ["ap-south-1", "us-east-1", "us-east-2", "eu-west-1"]
 class CreateClusterPayload(BaseModel):
     name:               str
     region:             str  = "ap-south-1"
-    kubernetes_version: str  = "1.29"
+    kubernetes_version: str  = "1.32"
     node_instance_type: str  = "t3.medium"
     node_count:         int  = 2
     min_nodes:          int  = 1
@@ -126,8 +127,13 @@ def get_cluster(
 @router.get("/versions")
 def get_supported_versions(user: User = Depends(get_current_user)):
     return {
-        "versions": ["1.29", "1.28", "1.27", "1.26"],
-        "default":  "1.29"
+        "versions": [
+            {"version": "1.35", "label": "1.35 (latest)", "support": "standard"},
+            {"version": "1.34", "label": "1.34",          "support": "standard"},
+            {"version": "1.33", "label": "1.33",          "support": "standard"},
+            {"version": "1.32", "label": "1.32",          "support": "standard"},
+        ],
+        "default": "1.32",
     }
 
 
@@ -157,19 +163,28 @@ def check_prerequisites(
     region: str = "ap-south-1",
     user: User = Depends(get_current_user)
 ):
-    result = {"iam_roles": [], "vpcs": [], "subnets": [], "ready": False}
+    result = {"cluster_roles": [], "node_roles": [], "vpcs": [], "subnets": [], "ready": False}
     try:
         iam = boto3.client("iam")
-        for role in iam.list_roles().get("Roles", []):
-            try:
-                attached = iam.list_attached_role_policies(RoleName=role["RoleName"])
-                for p in attached.get("AttachedPolicies", []):
-                    if "EKS" in p["PolicyName"]:
-                        entry = {"name": role["RoleName"], "arn": role["Arn"]}
-                        if entry not in result["iam_roles"]:
-                            result["iam_roles"].append(entry)
-            except Exception:
-                pass
+        paginator = iam.get_paginator("list_roles")
+        for page in paginator.paginate():
+            for role in page["Roles"]:
+                # Service-linked roles (path /aws-service-role/) cannot be passed as roleArn
+                if role["Path"].startswith("/aws-service-role/"):
+                    continue
+                try:
+                    policies = {
+                        p["PolicyName"]
+                        for p in iam.list_attached_role_policies(RoleName=role["RoleName"])
+                                      .get("AttachedPolicies", [])
+                    }
+                    entry = {"name": role["RoleName"], "arn": role["Arn"]}
+                    if "AmazonEKSClusterPolicy" in policies:
+                        result["cluster_roles"].append(entry)
+                    if "AmazonEKSWorkerNodePolicy" in policies:
+                        result["node_roles"].append(entry)
+                except Exception:
+                    pass
     except Exception as e:
         print(f"IAM check error: {e}")
 
@@ -200,8 +215,87 @@ def check_prerequisites(
     except Exception as e:
         print(f"VPC check error: {e}")
 
-    result["ready"] = len(result["iam_roles"]) > 0 and len(result["subnets"]) >= 2
+    result["ready"] = (
+        len(result["cluster_roles"]) > 0
+        and len(result["node_roles"]) > 0
+        and len(result["subnets"]) >= 2
+    )
     return result
+
+
+# ─── SETUP EKS IAM ROLES ───────────────────────────────────────────────────
+@router.post("/setup-roles")
+def setup_eks_roles(user: User = Depends(require_operator)):
+    """
+    Create standard EKS cluster + node IAM roles if they don't already exist.
+    Safe to call multiple times — skips roles that already exist.
+    """
+    ROLES = [
+        {
+            "name":        "aionos-eks-cluster-role",
+            "description": "EKS cluster control-plane role — AIonOS Platform",
+            "trust":       "eks.amazonaws.com",
+            "policies": [
+                "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
+                "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController",
+            ],
+        },
+        {
+            "name":        "aionos-eks-node-role",
+            "description": "EKS node group role — AIonOS Platform",
+            "trust":       "ec2.amazonaws.com",
+            "policies": [
+                "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
+                "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
+                "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+            ],
+        },
+    ]
+
+    iam     = boto3.client("iam")
+    results = []
+
+    for rc in ROLES:
+        try:
+            existing = iam.get_role(RoleName=rc["name"])
+            results.append({
+                "name":   rc["name"],
+                "arn":    existing["Role"]["Arn"],
+                "status": "already_exists",
+            })
+            continue
+        except iam.exceptions.NoSuchEntityException:
+            pass
+        except ClientError as e:
+            results.append({"name": rc["name"], "arn": "", "status": f"error: {e}"})
+            continue
+
+        try:
+            trust = {
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Effect":    "Allow",
+                    "Principal": {"Service": rc["trust"]},
+                    "Action":    "sts:AssumeRole",
+                }],
+            }
+            role = iam.create_role(
+                RoleName=rc["name"],
+                AssumeRolePolicyDocument=json.dumps(trust),
+                Description=rc["description"],
+                Tags=[{"Key": "ManagedBy", "Value": "AIonOS-Platform"}],
+            )
+            for policy_arn in rc["policies"]:
+                iam.attach_role_policy(RoleName=rc["name"], PolicyArn=policy_arn)
+            results.append({
+                "name":   rc["name"],
+                "arn":    role["Role"]["Arn"],
+                "status": "created",
+            })
+        except ClientError as e:
+            results.append({"name": rc["name"], "arn": "", "status": f"error: {e}"})
+
+    return {"roles": results}
 
 
 # ─── CREATE CLUSTER ────────────────────────────────────────────────────────

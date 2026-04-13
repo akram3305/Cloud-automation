@@ -1,12 +1,19 @@
 import { useEffect, useState, useCallback, useRef } from "react"
-import api from "../api/api"
+import { getActivityLogs } from "../api/api"
 import { useTheme } from "../context/ThemeContext"
 
 const TYPE_ICONS = {
-  EC2: "M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2",
-  S3: "M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4",
-  Request: "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z",
+  EC2:        "M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2",
+  S3:         "M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4",
+  EKS:        "M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5",
+  RDS:        "M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4",
+  Lambda:     "M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3l6 9m-6-9l-6 9",
+  VPC:        "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  IAM:        "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z",
+  ELB:        "M3 6l9-4 9 4v6a9 9 0 01-9 8 9 9 0 01-9-8V6z",
+  Request:    "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z",
   CloudTrail: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2",
+  AWS:        "M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5",
 }
 
 function timeAgo(iso) {
@@ -26,6 +33,7 @@ export default function Activity() {
   const [autoRef, setAutoRef] = useState(true)
   const [lastRef, setLastRef] = useState(null)
   const [newCount, setNewCount] = useState(0)
+  const [hours, setHours] = useState(72)
   const prevIds = useRef(new Set())
 
   const bg = dark ? "#070c18" : "#f0f4f8"
@@ -37,7 +45,7 @@ export default function Activity() {
 
   const fetchLogs = useCallback(async (silent = false) => {
     try {
-      const { data } = await api.get("/logs/activity?limit=100")
+      const { data } = await getActivityLogs(100, hours)
       const newIds = new Set(data.map(l => l.id))
       const added = silent ? [...newIds].filter(id => !prevIds.current.has(id)).length : 0
       if (added > 0) setNewCount(n => n + added)
@@ -46,7 +54,7 @@ export default function Activity() {
       setLastRef(new Date())
     } catch (e) { console.error(e) }
     finally { setLoading(false) }
-  }, [])
+  }, [hours])
 
   useEffect(() => { fetchLogs() }, [fetchLogs])
 
@@ -56,14 +64,28 @@ export default function Activity() {
     return () => clearInterval(id)
   }, [autoRef, fetchLogs])
 
-  const filtered = filter === "all" ? logs : logs.filter(l => l.source === filter || l.type.toLowerCase() === filter)
+  const filtered = filter === "all" ? logs : logs.filter(l =>
+    l.source === filter || l.type?.toLowerCase() === filter
+  )
 
   const FILTERS = [
-    { id: "all", label: "All events" },
-    { id: "platform", label: "Platform" },
-    { id: "aws", label: "AWS" },
-    { id: "ec2", label: "EC2" },
-    { id: "s3", label: "S3" },
+    { id: "all",      label: "All events" },
+    { id: "platform", label: "Platform"   },
+    { id: "aws",      label: "AWS"        },
+    { id: "ec2",      label: "EC2"        },
+    { id: "eks",      label: "EKS"        },
+    { id: "s3",       label: "S3"         },
+    { id: "rds",      label: "RDS"        },
+    { id: "lambda",   label: "Lambda"     },
+    { id: "iam",      label: "IAM"        },
+    { id: "vpc",      label: "VPC"        },
+  ]
+
+  const HOUR_OPTIONS = [
+    { v: 24,       label: "24h"    },
+    { v: 72,       label: "3 days" },
+    { v: 168,      label: "7 days" },
+    { v: 720,      label: "30 days"},
   ]
 
   const stats = {
@@ -91,7 +113,16 @@ export default function Activity() {
             {lastRef && " - last updated " + timeAgo(lastRef.toISOString())}
           </p>
         </div>
-        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+          {/* Time window selector */}
+          <div style={{ display: "flex", background: surface, border: "1px solid " + border, borderRadius: "8px", overflow: "hidden" }}>
+            {HOUR_OPTIONS.map(o => (
+              <button key={o.v} onClick={() => { setHours(o.v); setTimeout(fetchLogs, 0) }}
+                style={{ padding: "6px 12px", border: "none", fontSize: "12px", cursor: "pointer", background: hours === o.v ? "#00d4aa20" : "transparent", color: hours === o.v ? "#00d4aa" : muted, fontWeight: hours === o.v ? 600 : 400, borderRight: "1px solid " + border }}>
+                {o.label}
+              </button>
+            ))}
+          </div>
           {newCount > 0 && (
             <div style={{ background: "#00d4aa15", border: "1px solid #00d4aa30", color: "#00d4aa", padding: "6px 12px", borderRadius: "8px", fontSize: "12px", fontWeight: "600", cursor: "pointer" }}
               onClick={() => { setNewCount(0); fetchLogs() }}>

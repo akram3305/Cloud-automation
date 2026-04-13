@@ -298,6 +298,7 @@ def _run_pipeline(request_id: int):
         archive_to_s3,
         cleanup_workspace,
     )
+    import pipeline_tracker as pt
 
     db = SessionLocal()
 
@@ -312,13 +313,18 @@ def _run_pipeline(request_id: int):
 
     def _log(msg: str):
         print(f"[req_{request_id}] {msg}", flush=True)
+        pt.append_log(request_id, msg)
 
     apply_output = ""
+
+    # ── Initialise tracker ────────────────────────────────────────────────
+    pt.init_pipeline(request_id)
 
     try:
         req = db.query(Request).filter(Request.id == request_id).first()
         if not req:
             _log("Request not found — aborting pipeline")
+            pt.fail_pipeline(request_id)
             return
 
         payload       = json.loads(req.payload or "{}")
@@ -332,34 +338,45 @@ def _run_pipeline(request_id: int):
         _log("=" * 55)
 
         # ── STEP 1: Write template + tfvars ───────────────────────────────
+        pt.set_stage(request_id, "generating", "running")
         _update("generating")
         _log("STEP 1/4: Writing template + tfvars...")
         try:
             tf_file = write_resource(request_id, resource_type, payload)
             _log(f"Written: {tf_file}")
+            pt.set_stage(request_id, "generating", "done")
         except Exception as e:
+            pt.set_stage(request_id, "generating", "failed")
+            pt.fail_pipeline(request_id)
             _update("failed", f"Failed to write resource: {e}")
             _log(f"WRITE FAILED: {e}")
             return
 
         # ── STEP 2: terraform init ────────────────────────────────────────
+        pt.set_stage(request_id, "init", "running")
         _log("STEP 2/4: terraform init...")
         init = run_terraform("init", env, request_id=request_id)
         if not init["success"]:
             err = (init.get("error") or init.get("output") or "init failed")[:400]
+            pt.set_stage(request_id, "init", "failed")
+            pt.fail_pipeline(request_id)
             _update("failed", f"terraform init failed: {err}")
             _log(f"INIT FAILED: {err}")
             cleanup_workspace(request_id, env)
             return
+        pt.set_stage(request_id, "init", "done")
         _log("init OK")
 
         # ── STEP 3: terraform plan ────────────────────────────────────────
+        pt.set_stage(request_id, "plan", "running")
         _update("planning")
         _log("STEP 3/4: terraform plan...")
         plan = run_terraform("plan", env, request_id=request_id)
 
         if not plan["success"]:
             err = (plan.get("error") or plan.get("output") or "plan failed")[:400]
+            pt.set_stage(request_id, "plan", "failed")
+            pt.fail_pipeline(request_id)
             _update("plan_failed", f"terraform plan failed: {err}")
             _log(f"PLAN FAILED: {err}")
             cleanup_workspace(request_id, env)
@@ -369,9 +386,11 @@ def _run_pipeline(request_id: int):
         for line in plan.get("output", "").splitlines():
             if any(x in line for x in ["to add", "to change", "to destroy", "Plan:"]):
                 _log(f"  {line.strip()}")
+        pt.set_stage(request_id, "plan", "done")
         _log("plan OK")
 
         # ── STEP 4: terraform apply ───────────────────────────────────────
+        pt.set_stage(request_id, "apply", "running")
         _update("provisioning")
         _log("STEP 4/4: terraform apply...")
         apply = run_terraform("apply", env, request_id=request_id)
@@ -379,6 +398,8 @@ def _run_pipeline(request_id: int):
 
         if not apply["success"]:
             err = (apply.get("error") or apply.get("output") or "apply failed")[:400]
+            pt.set_stage(request_id, "apply", "failed")
+            pt.fail_pipeline(request_id)
             _update("failed", f"terraform apply failed: {err}")
             _log(f"APPLY FAILED: {err}")
             # Archive logs even on failure for debugging
@@ -386,6 +407,7 @@ def _run_pipeline(request_id: int):
             cleanup_workspace(request_id, env)
             return
 
+        pt.set_stage(request_id, "apply", "done")
         _log("apply OK")
 
         # ── Get outputs ───────────────────────────────────────────────────
@@ -440,6 +462,7 @@ def _run_pipeline(request_id: int):
         _log("Cleaning up local workspace...")
         cleanup_workspace(request_id, env)
 
+        pt.complete_pipeline(request_id)
         _log("=" * 55)
         _log("PIPELINE COMPLETE ✓")
         _log("=" * 55)
@@ -448,6 +471,7 @@ def _run_pipeline(request_id: int):
         tb = traceback.format_exc()
         _log(f"PIPELINE EXCEPTION: {e}\n{tb}")
         _update("failed", f"Pipeline exception: {str(e)[:400]}")
+        pt.fail_pipeline(request_id)
         # Try to archive and cleanup even on exception
         try:
             archive_to_s3(request_id, _get_env(
@@ -460,3 +484,35 @@ def _run_pipeline(request_id: int):
             pass
     finally:
         db.close()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# PIPELINE STATE — live stage data for frontend visualization
+# ──────────────────────────────────────────────────────────────────────────
+
+@router.get("/{request_id}/pipeline")
+def get_pipeline_state(
+    request_id: int,
+    db:   Session = Depends(get_db),
+    user: User    = Depends(get_current_user),
+):
+    r = db.query(Request).filter(Request.id == request_id).first()
+    if not r:
+        raise HTTPException(404, "Request not found")
+    if user.role not in ("admin", "operator") and r.username != user.username:
+        raise HTTPException(403, "Access denied")
+
+    import pipeline_tracker as pt
+    state = pt.get_state(request_id)
+
+    return {
+        "request_id":    request_id,
+        "resource_name": r.resource_name,
+        "resource_type": r.resource_type,
+        "status":        r.status,
+        "approved_by":   r.approved_by,
+        "reject_reason": r.reject_reason,
+        "region":        r.region,
+        "created_at":    str(r.created_at),
+        "pipeline":      state,
+    }

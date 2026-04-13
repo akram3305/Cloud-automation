@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from "react"
 import { useTheme } from "../context/ThemeContext"
 import api from "../api/api"
+import { setupEKSRoles } from "../api/api"
 
-const K8S_VERSIONS    = ["1.29","1.28","1.27","1.26"]
+const K8S_VERSIONS    = ["1.35","1.34","1.33","1.32"]
 const REGIONS         = ["ap-south-1","us-east-1","us-east-2","eu-west-1","ap-southeast-1"]
 const INSTANCE_TYPES  = [
   { type:"t3.medium",  vcpu:2, ram:"4 GiB",  desc:"Dev/test" },
@@ -33,13 +34,15 @@ export default function EKS() {
   const [clusters,    setClusters]    = useState([])
   const [loading,     setLoading]     = useState(true)
   const [showModal,   setShowModal]   = useState(false)
-  const [submitting,  setSubmitting]  = useState(false)
-  const [success,     setSuccess]     = useState("")
-  const [error,       setError]       = useState("")
-  const [prereqs,     setPrereqs]     = useState(null)
+  const [submitting,     setSubmitting]     = useState(false)
+  const [success,        setSuccess]        = useState("")
+  const [error,          setError]          = useState("")
+  const [prereqs,        setPrereqs]        = useState(null)
+  const [settingUpRoles, setSettingUpRoles] = useState(false)
+  const [setupResult,    setSetupResult]    = useState(null)
   const [form, setForm] = useState({
     name: "", region: "ap-south-1",
-    kubernetes_version: "1.29",
+    kubernetes_version: "1.32",
     node_instance_type: "t3.medium",
     node_count: 2, min_nodes: 1, max_nodes: 5,
     cluster_role_arn: "", node_role_arn: "",
@@ -81,15 +84,28 @@ export default function EKS() {
     try {
       const { data } = await api.get(`/eks/prerequisites?region=${region}`)
       setPrereqs(data)
-      // Auto-fill first IAM role if available
-      if (data.iam_roles?.length > 0) {
-        setForm(p => ({
-          ...p,
-          cluster_role_arn: data.iam_roles[0]?.arn || "",
-          node_role_arn:    data.iam_roles[0]?.arn || "",
-        }))
-      }
+      setSetupResult(null)
+      setForm(p => ({
+        ...p,
+        cluster_role_arn: data.cluster_roles?.[0]?.arn || "",
+        node_role_arn:    data.node_roles?.[0]?.arn    || "",
+      }))
     } catch(e) { console.error("Prereqs load failed:", e) }
+  }
+
+  async function handleSetupRoles() {
+    setSettingUpRoles(true)
+    setSetupResult(null)
+    try {
+      const { data } = await setupEKSRoles()
+      setSetupResult(data.roles)
+      // Reload prereqs so dropdowns populate with the new roles
+      await loadPrereqs(form.region)
+    } catch(e) {
+      setSetupResult([{ name: "Error", status: e.response?.data?.detail || e.message }])
+    } finally {
+      setSettingUpRoles(false)
+    }
   }
 
   function openModal() {
@@ -243,22 +259,68 @@ export default function EKS() {
                 const sc = STATUS_COLORS[c.status] || "#64748b"
                 return (
                   <div key={i} style={{ background:surface, border:"1px solid "+border, borderRadius:"12px", padding:"16px 20px", marginBottom:"8px" }}>
+                    {/* Cluster header */}
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
                       <div style={{ display:"flex", gap:"14px", alignItems:"center" }}>
                         <div style={{ width:"40px", height:"40px", borderRadius:"10px", background:"#00d4aa20", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"20px" }}>⚙️</div>
                         <div>
-                          <div style={{ display:"flex", alignItems:"center", gap:"8px", marginBottom:"4px" }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:"8px", marginBottom:"4px", flexWrap:"wrap" }}>
                             <span style={{ fontSize:"14px", fontWeight:"700", color:text }}>{c.name}</span>
                             <span style={{ background:sc+"20", color:sc, padding:"2px 8px", borderRadius:"10px", fontSize:"11px", fontWeight:"600" }}>{c.status}</span>
                             <span style={{ background:"#3b82f620", color:"#3b82f6", padding:"2px 8px", borderRadius:"10px", fontSize:"11px" }}>K8s {c.version}</span>
+                            <span style={{ background:"#a78bfa20", color:"#a78bfa", padding:"2px 8px", borderRadius:"10px", fontSize:"11px" }}>
+                              {c.total_nodes || 0} nodes
+                            </span>
                           </div>
                           <div style={{ fontSize:"12px", color:muted }}>
-                            📍 {c.region} · 🖥 {c.total_nodes || 0} nodes
-                            {c.endpoint && <span style={{ marginLeft:"8px", fontFamily:"monospace", fontSize:"11px" }}>🔗 {c.endpoint?.slice(0,40)}...</span>}
+                            📍 {c.region}
+                            {c.endpoint && <span style={{ marginLeft:"8px", fontFamily:"monospace", fontSize:"11px" }}>🔗 {c.endpoint?.slice(0,50)}...</span>}
                           </div>
                         </div>
                       </div>
+                      {c.status === "CREATING" && (
+                        <div style={{ width:"8px", height:"8px", borderRadius:"50%", background:"#3b82f6", animation:"pulse 1.5s infinite", marginTop:"6px" }} />
+                      )}
                     </div>
+
+                    {/* Node groups */}
+                    {c.node_groups && c.node_groups.length > 0 ? (
+                      <div style={{ marginTop:"14px", paddingTop:"14px", borderTop:"1px solid "+border }}>
+                        <div style={{ fontSize:"11px", fontWeight:"600", color:muted, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"8px" }}>
+                          Node Groups ({c.node_groups.length})
+                        </div>
+                        <div style={{ display:"flex", flexDirection:"column", gap:"6px" }}>
+                          {c.node_groups.map((ng, ni) => {
+                            const ngColor = STATUS_COLORS[ng.status] || "#64748b"
+                            return (
+                              <div key={ni} style={{ background:subtle, border:"1px solid "+border, borderRadius:"8px", padding:"10px 14px", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:"8px" }}>
+                                <div style={{ display:"flex", alignItems:"center", gap:"8px" }}>
+                                  <span style={{ fontSize:"13px" }}>🖥</span>
+                                  <div>
+                                    <div style={{ fontSize:"13px", fontWeight:"600", color:text }}>{ng.name}</div>
+                                    <div style={{ fontSize:"11px", color:muted }}>{ng.instance_type} · {ng.capacity_type || "ON_DEMAND"}</div>
+                                  </div>
+                                </div>
+                                <div style={{ display:"flex", alignItems:"center", gap:"10px", flexWrap:"wrap" }}>
+                                  <span style={{ background:ngColor+"20", color:ngColor, padding:"2px 8px", borderRadius:"8px", fontSize:"11px", fontWeight:"600" }}>{ng.status}</span>
+                                  <div style={{ fontSize:"12px", color:muted }}>
+                                    Desired <strong style={{ color:text }}>{ng.desired}</strong>
+                                    <span style={{ margin:"0 4px" }}>·</span>
+                                    Min <strong style={{ color:text }}>{ng.min}</strong>
+                                    <span style={{ margin:"0 4px" }}>·</span>
+                                    Max <strong style={{ color:text }}>{ng.max}</strong>
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ) : c.status === "ACTIVE" ? (
+                      <div style={{ marginTop:"10px", paddingTop:"10px", borderTop:"1px solid "+border, fontSize:"12px", color:muted }}>
+                        No node groups found — they may still be provisioning. Refreshing every 15s.
+                      </div>
+                    ) : null}
                   </div>
                 )
               })}
@@ -318,20 +380,52 @@ export default function EKS() {
                   {K8S_VERSIONS.map(v => (
                     <button key={v} onClick={() => setForm(p=>({...p,kubernetes_version:v}))}
                       style={{ flex:1, padding:"8px", borderRadius:"8px", cursor:"pointer", border:"1px solid "+(form.kubernetes_version===v?"#00d4aa40":border), background:form.kubernetes_version===v?"#00d4aa15":surface, color:form.kubernetes_version===v?"#00d4aa":text, fontWeight:"600", fontSize:"12px" }}>
-                      {v}{v==="1.29"?" ✓":""}
+                      {v}
+                      <div style={{ fontSize:"9px", fontWeight:"400", color:form.kubernetes_version===v?"#00d4aa":muted, marginTop:"2px" }}>
+                        {v==="1.35"?"latest":""}{v==="1.32"?"LTS":""}
+                        {" Standard"}
+                      </div>
                     </button>
                   ))}
                 </div>
               </div>
 
+              {/* Setup EKS Roles banner — shown when no eligible roles exist yet */}
+              {prereqs && prereqs.cluster_roles?.length === 0 && prereqs.node_roles?.length === 0 && (
+                <div style={{ background:"#f59e0b10", border:"1px solid #f59e0b40", borderRadius:"10px", padding:"14px 16px" }}>
+                  <div style={{ fontSize:"13px", fontWeight:"600", color:"#f59e0b", marginBottom:"6px" }}>
+                    No EKS IAM roles found in your account
+                  </div>
+                  <div style={{ fontSize:"12px", color:muted, marginBottom:"10px" }}>
+                    You need an EKS cluster role (<code>AmazonEKSClusterPolicy</code>) and a node role (<code>AmazonEKSWorkerNodePolicy</code>).
+                    Click below to create both automatically.
+                  </div>
+                  {setupResult && (
+                    <div style={{ marginBottom:"10px", display:"flex", flexDirection:"column", gap:"4px" }}>
+                      {setupResult.map((r, i) => (
+                        <div key={i} style={{ fontSize:"11px", fontFamily:"monospace", color: r.status === "created" ? "#00d4aa" : r.status === "already_exists" ? "#3b82f6" : "#f43f5e" }}>
+                          {r.status === "created" ? "✓ Created: " : r.status === "already_exists" ? "— Exists: " : "✗ "}{r.name}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <button onClick={handleSetupRoles} disabled={settingUpRoles} style={{
+                    padding:"8px 16px", borderRadius:"8px", fontSize:"12px", fontWeight:"600",
+                    border:"none", background:"#f59e0b", color:"#0a0f1e", cursor:"pointer", opacity: settingUpRoles ? 0.7 : 1
+                  }}>
+                    {settingUpRoles ? "Creating roles…" : "Create EKS IAM Roles"}
+                  </button>
+                </div>
+              )}
+
               {/* IAM Roles */}
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"14px" }}>
                 <div>
                   <label style={{ display:"block", fontSize:"12px", color:muted, marginBottom:"5px" }}>Cluster Role ARN *</label>
-                  {prereqs?.iam_roles?.length > 0 ? (
+                  {prereqs?.cluster_roles?.length > 0 ? (
                     <select style={inp} value={form.cluster_role_arn} onChange={e=>setForm(p=>({...p,cluster_role_arn:e.target.value}))}>
-                      <option value="">Select role...</option>
-                      {prereqs.iam_roles.map(r=><option key={r.arn} value={r.arn}>{r.name}</option>)}
+                      <option value="">Select cluster role...</option>
+                      {prereqs.cluster_roles.map(r=><option key={r.arn} value={r.arn}>{r.name}</option>)}
                     </select>
                   ) : (
                     <input style={inp} placeholder="arn:aws:iam::xxx:role/eks-cluster-role" value={form.cluster_role_arn} onChange={e=>setForm(p=>({...p,cluster_role_arn:e.target.value}))} />
@@ -339,10 +433,10 @@ export default function EKS() {
                 </div>
                 <div>
                   <label style={{ display:"block", fontSize:"12px", color:muted, marginBottom:"5px" }}>Node Role ARN *</label>
-                  {prereqs?.iam_roles?.length > 0 ? (
+                  {prereqs?.node_roles?.length > 0 ? (
                     <select style={inp} value={form.node_role_arn} onChange={e=>setForm(p=>({...p,node_role_arn:e.target.value}))}>
-                      <option value="">Select role...</option>
-                      {prereqs.iam_roles.map(r=><option key={r.arn} value={r.arn}>{r.name}</option>)}
+                      <option value="">Select node role...</option>
+                      {prereqs.node_roles.map(r=><option key={r.arn} value={r.arn}>{r.name}</option>)}
                     </select>
                   ) : (
                     <input style={inp} placeholder="arn:aws:iam::xxx:role/eks-node-role" value={form.node_role_arn} onChange={e=>setForm(p=>({...p,node_role_arn:e.target.value}))} />
@@ -402,6 +496,24 @@ export default function EKS() {
                   <label style={{ display:"block", fontSize:"12px", color:muted, marginBottom:"4px" }}>Owner *</label>
                   <input style={inp} placeholder="your-name" value={form.tags.owner} onChange={e=>setForm(p=>({...p,tags:{...p.tags,owner:e.target.value}}))} />
                 </div>
+              </div>
+
+              {/* Environment */}
+              <div>
+                <label style={{ display:"block", fontSize:"12px", color:muted, marginBottom:"6px" }}>Environment *</label>
+                <div style={{ display:"flex", gap:"8px" }}>
+                  {["dev","staging","prod"].map(env => (
+                    <button key={env} type="button"
+                      onClick={() => setForm(p=>({...p, tags:{...p.tags, environment:env}}))}
+                      style={{ flex:1, padding:"8px", borderRadius:"8px", cursor:"pointer", fontSize:"12px", fontWeight:"600",
+                        border:"1px solid "+(form.tags.environment===env?"#00d4aa40":border),
+                        background: form.tags.environment===env?"#00d4aa15":surface,
+                        color:       form.tags.environment===env?"#00d4aa":muted }}>
+                      {env}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize:"11px", color:muted, marginTop:"4px" }}>Cluster will be provisioned in this environment workspace.</div>
               </div>
 
               <div style={{ background:"#f59e0b10", border:"1px solid #f59e0b30", borderRadius:"8px", padding:"10px 14px", fontSize:"12px", color:"#f59e0b" }}>

@@ -123,7 +123,7 @@ def archive_to_s3(request_id: int, environment: str, log_output: str = "") -> bo
                            aws_access_key_id=AWS_ACCESS_KEY,
                            aws_secret_access_key=AWS_SECRET_KEY)
         ws  = get_workspace(request_id, environment)
-        pfx = f"logs/{environment}/req_{request_id}"
+        pfx = f"aionos/logs/{environment}/req_{request_id}"
 
         main_tf = ws / "main.tf"
         if main_tf.exists():
@@ -153,7 +153,7 @@ def get_archived_files(request_id: int, environment: str) -> dict:
                            region_name=STATE_REGION,
                            aws_access_key_id=AWS_ACCESS_KEY,
                            aws_secret_access_key=AWS_SECRET_KEY)
-        pfx = f"logs/{environment}/req_{request_id}"
+        pfx = f"aionos/logs/{environment}/req_{request_id}"
         result = {}
         for key in ["main.tf", "terraform.tfvars", "apply.log"]:
             try:
@@ -194,7 +194,7 @@ def run_terraform(action: str, environment: str = "dev",
 
     cmd_map = {
         "init":     [TERRAFORM_BIN, "init",    "-no-color", "-input=false",
-                     f"-backend-config=key={environment}/req_{request_id}/terraform.tfstate",
+                     f"-backend-config=key=aionos/state/{environment}/req_{request_id}/terraform.tfstate",
                      f"-backend-config=bucket={STATE_BUCKET}",
                      f"-backend-config=region={STATE_REGION}",
                      f"-backend-config=dynamodb_table={DYNAMO_TABLE}",

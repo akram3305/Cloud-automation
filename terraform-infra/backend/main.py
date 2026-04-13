@@ -31,6 +31,7 @@ from routers import vpc
 from routers import iam
 from routers import approvals
 from routers import terraform
+from routers import sync
 
 # ──────────────────────────────────────────────────────────────────────────
 # DATABASE SETUP
@@ -38,6 +39,25 @@ from routers import terraform
 
 Base.metadata.create_all(bind=engine)
 
+# ── Lightweight column migrations (idempotent — safe to run every startup) ─
+from sqlalchemy import text as _sql_text
+
+def _run_migrations():
+    """Add new columns to existing tables without breaking anything."""
+    migrations = [
+        "ALTER TABLE vms ADD COLUMN environment  VARCHAR(32)  DEFAULT 'dev'",
+        "ALTER TABLE vms ADD COLUMN project_tag  VARCHAR(128)",
+        "ALTER TABLE vms ADD COLUMN owner_tag    VARCHAR(128)",
+    ]
+    with engine.connect() as conn:
+        for stmt in migrations:
+            try:
+                conn.execute(_sql_text(stmt))
+                conn.commit()
+            except Exception:
+                pass  # column already exists — ignore
+
+_run_migrations()
 
 # ──────────────────────────────────────────────────────────────────────────
 # SEED DEFAULT USERS
@@ -127,6 +147,7 @@ app.include_router(vpc.router)
 app.include_router(iam.router)
 app.include_router(approvals.router)
 app.include_router(terraform.router)
+app.include_router(sync.router)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -148,13 +169,22 @@ def health():
 # ──────────────────────────────────────────────────────────────────────────
 
 SYNC_REGIONS  = ["ap-south-1"]
-SYNC_INTERVAL = 30  # seconds
+SYNC_INTERVAL = 10  # seconds — faster sync for near-real-time updates
+
+
+def _normalize_env(raw: str) -> str:
+    """Normalize an AWS Environment tag value to dev/staging/prod."""
+    v = (raw or "dev").lower().strip()
+    if v in ("production", "prod"):     return "prod"
+    if v in ("staging", "stage"):       return "staging"
+    if v in ("dev", "development"):     return "dev"
+    return "dev"
 
 
 def auto_sync_loop():
     """
-    Background thread — syncs EC2 instance state from AWS to DB.
-    Only syncs instances tagged with ManagedBy=terraform.
+    Background thread — syncs ALL EC2 instance state from AWS to DB.
+    Discovers instances created directly in AWS (not just platform-managed ones).
     """
     while True:
         try:
@@ -165,10 +195,9 @@ def auto_sync_loop():
             for region in SYNC_REGIONS:
                 try:
                     ec2  = boto3.client("ec2", region_name=region)
+                    # Sync ALL non-terminated instances (including AWS-console-created ones)
                     resp = ec2.describe_instances(
                         Filters=[
-                            # Only sync instances managed by this platform
-                            {"Name": "tag:ManagedBy", "Values": ["terraform"]},
                             {"Name": "instance-state-name",
                              "Values": ["pending", "running", "stopping", "stopped"]},
                         ]
@@ -178,11 +207,15 @@ def auto_sync_loop():
                         for inst in reservation["Instances"]:
                             iid   = inst["InstanceId"]
                             state = inst["State"]["Name"]
-                            name  = next(
-                                (t["Value"] for t in inst.get("Tags", [])
-                                 if t["Key"] == "Name"),
-                                iid
-                            )
+                            tags  = inst.get("Tags", [])
+
+                            def _tag(key, default=""):
+                                return next((t["Value"] for t in tags if t["Key"] == key), default)
+
+                            name          = _tag("Name", iid)
+                            environment   = _normalize_env(_tag("Environment", "dev"))
+                            project_tag   = _tag("Project") or _tag("project") or None
+                            owner_tag     = _tag("Owner") or _tag("ManagedBy") or _tag("CreatedBy") or None
                             public_ip     = inst.get("PublicIpAddress")
                             instance_type = inst.get("InstanceType")
                             ami           = inst.get("ImageId")
@@ -190,26 +223,32 @@ def auto_sync_loop():
                             vm = db.query(VM).filter(VM.instance_id == iid).first()
 
                             if vm:
-                                # Update existing VM state
-                                vm.state     = state
-                                vm.public_ip = public_ip
+                                # Update existing VM
+                                vm.state       = state
+                                vm.public_ip   = public_ip
+                                vm.environment = environment
+                                if project_tag: vm.project_tag = project_tag
+                                if owner_tag:   vm.owner_tag   = owner_tag
                                 if state == "running":
                                     vm.start_time = vm.start_time or datetime.utcnow()
                                 else:
                                     vm.start_time = None
                             else:
-                                # Register new VM discovered in AWS
-                                print(f"Sync: Discovered new VM {iid} ({name})")
+                                # Register new VM discovered directly in AWS
+                                print(f"Sync: Discovered new VM {iid} ({name}) [{environment}]")
                                 new_vm = VM(
                                     name          = name,
                                     instance_id   = iid,
                                     instance_type = instance_type,
                                     region        = region,
                                     state         = state,
-                                    ami_id        = ami,
+                                    ami_id        = ami or "unknown",
                                     public_ip     = public_ip,
                                     owner_id      = system_id,
-                                    owner_username= "system",
+                                    owner_username= "aws-console",
+                                    environment   = environment,
+                                    project_tag   = project_tag,
+                                    owner_tag     = owner_tag,
                                     start_time    = datetime.utcnow() if state == "running" else None,
                                 )
                                 db.add(new_vm)

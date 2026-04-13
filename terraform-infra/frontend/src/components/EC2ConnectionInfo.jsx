@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import { useTheme } from "../context/ThemeContext"
 import api from "../api/api"
+import QuickUnlock from "./QuickUnlock"
 
 const AMI_USERS = {
   "amazon-linux": "ec2-user",
@@ -166,8 +167,10 @@ export default function EC2ConnectionInfo({ vm, onClose }) {
                 <div style={{ color:muted }}>2. Move it to your SSH folder and set permissions</div>
                 <div style={{ color:muted }}>3. Instance must be in <strong style={{ color:"#00d4aa" }}>running</strong> state</div>
               </div>
+              <QuickUnlock label="SSH Connection Commands" dark={dark} autoLockSeconds={120}>
               <CodeBlock code={chmodCmd} label="Step 1 — Fix key permissions (run once)" />
               <CodeBlock code={sshCmd} label="Step 2 — Connect via SSH" />
+              </QuickUnlock>
               <div style={{ background:subtle, borderRadius:"8px", padding:"14px", border:"1px solid "+border }}>
                 <div style={{ fontSize:"12px", fontWeight:"600", color:text, marginBottom:"8px" }}>Default credentials by OS</div>
                 {[
@@ -258,6 +261,7 @@ export default function EC2ConnectionInfo({ vm, onClose }) {
           {/* Info Tab */}
           {tab==="info" && (
             <div>
+              <QuickUnlock label="Instance Details" dark={dark} autoLockSeconds={180}>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px" }}>
                 {[
                   ["Instance ID",    currentVM.instance_id || "--"],
@@ -287,6 +291,7 @@ export default function EC2ConnectionInfo({ vm, onClose }) {
                   {currentVM.auto_stop  && <div style={{ color:muted }}>Stop:  <strong style={{ color:"#f43f5e" }}>{currentVM.auto_stop}</strong> daily</div>}
                 </div>
               ) : null}
+              </QuickUnlock>
             </div>
           )}
 

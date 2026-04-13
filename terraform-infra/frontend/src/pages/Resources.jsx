@@ -92,7 +92,7 @@ export default function Resources() {
   const [connVM,setConnVM]           = useState(null)
   const [showIAMModal,setIAMModal] = useState(false)
   const [schedVM,setSchedVM]       = useState(null)
-  const [s3Form,setS3Form]         = useState({name:"",region:"ap-south-1",versioning:false,public:false,encryption:"AES256"})
+  const [s3Form,setS3Form]         = useState({name:"",region:"ap-south-1",versioning:false,public:false,encryption:"AES256",project:"",owner:"",environment:"dev"})
   const [s3Creating,setS3C]        = useState(false)
   const [s3Err,setS3Err]           = useState("")
   const [vpcForm,setVPCForm]       = useState({name:"",cidr:"10.0.0.0/16",region:"ap-south-1",enable_dns:true})
@@ -156,8 +156,20 @@ export default function Resources() {
 
   async function handleS3Create(){
     if(!s3Form.name.trim()){setS3Err("Name required");return}
+    if(!s3Form.project.trim()){setS3Err("Project name is required");return}
+    if(!s3Form.owner.trim()){setS3Err("Owner is required");return}
     setS3C(true);setS3Err("")
-    try{const {createBucket}=await import("../api/api");await createBucket(s3Form);setSuccess("Bucket created");setS3Modal(false);setS3Form({name:"",region:"ap-south-1",versioning:false,public:false,encryption:"AES256"});fetchAll();setTimeout(()=>setSuccess(""),3000)}
+    try{
+      await api.post("/requests",{
+        resource_name:s3Form.name,resource_type:"s3",region:s3Form.region,
+        payload:{name:s3Form.name,region:s3Form.region,versioning:s3Form.versioning,encryption:s3Form.encryption,
+          tags:{project:s3Form.project,owner:s3Form.owner,environment:s3Form.environment,CreatedBy:"AIonOS-Platform"}}
+      })
+      setSuccess("S3 bucket request submitted — pending admin approval")
+      setS3Modal(false)
+      setS3Form({name:"",region:"ap-south-1",versioning:false,public:false,encryption:"AES256",project:"",owner:"",environment:"dev"})
+      setTimeout(()=>setSuccess(""),5000)
+    }
     catch(e){setS3Err(e.response?.data?.detail||e.message)}finally{setS3C(false)}
   }
 
@@ -217,6 +229,7 @@ export default function Resources() {
 
   function makeRows(type){
     if(type==="ec2")return vms.map(v=>({id:v.id,label:v.name,status:v.state,region:v.region,detail:v.instance_type,
+      environment:v.environment||"dev",project:v.project_tag||"",owner:v.owner_tag||v.owner_username||"",
       actions:<div style={{display:"flex",gap:"6px"}}>
         {v.state==="stopped"&&<button onClick={()=>handleStart(v)} disabled={actionId===v.id+"-start"} style={{padding:"3px 10px",borderRadius:"6px",fontSize:"11px",cursor:"pointer",border:"1px solid #00d4aa40",background:"#00d4aa15",color:"#00d4aa"}}>{actionId===v.id+"-start"?"...":"Start"}</button>}
         {v.state==="running"&&<button onClick={()=>handleStop(v)} disabled={actionId===v.id+"-stop"} style={{padding:"3px 10px",borderRadius:"6px",fontSize:"11px",cursor:"pointer",border:"1px solid #f59e0b40",background:"#f59e0b15",color:"#f59e0b"}}>{actionId===v.id+"-stop"?"...":"Stop"}</button>}
@@ -224,17 +237,19 @@ export default function Resources() {
         <button onClick={(e)=>{e.stopPropagation();setSchedVM(v)}} style={{padding:"3px 10px",borderRadius:"6px",fontSize:"11px",cursor:"pointer",border:"1px solid #3b82f640",background:"#3b82f615",color:"#3b82f6"}}>{(v.auto_start||v.auto_stop)?"Scheduled":"Schedule"}</button>
       </div>}))
     if(type==="s3")return s3.map(b=>({id:b.name,label:b.name,status:"active",region:b.region,detail:new Date(b.created).toLocaleDateString("en-IN"),
+      environment:b.tags?.Environment||"",project:b.tags?.Project||"",owner:b.tags?.Owner||"",
       actions:<button onClick={()=>handleDeleteBucket(b.name)} style={{padding:"3px 10px",borderRadius:"6px",fontSize:"11px",cursor:"pointer",border:"1px solid #f43f5e40",background:"#f43f5e15",color:"#f43f5e"}}>Delete</button>}))
     if(type==="eks")return eksClusters.map(c=>({id:c.name,label:c.name,status:c.status,region:c.region,detail:`K8s ${c.version} — ${c.total_nodes||0} nodes`,
+      environment:"",project:"",owner:"",
       actions:<button onClick={()=>handleDeleteEKS(c.name,c.region)} style={{padding:"3px 10px",borderRadius:"6px",fontSize:"11px",cursor:"pointer",border:"1px solid #f43f5e40",background:"#f43f5e15",color:"#f43f5e"}}>Delete</button>}))
-    if(type==="vpc")return vpcs.map(v=>({id:v.id,label:v.name||v.id,status:"available",region:v.region,detail:v.cidr,actions:null}))
-    if(type==="lambda")return lambdas.map(l=>({id:l.name,label:l.name,status:"active",region:l.region,detail:l.runtime+" - "+l.size_kb+" KB",actions:null}))
-    if(type==="elb")return lbs.map(lb=>({id:lb.name,label:lb.name,status:lb.state,region:lb.region,detail:lb.type,actions:null}))
-    if(type==="iam")return iamRoles.map(r=>({id:r.name,label:r.name,status:r.type,region:"global",detail:r.arn?.slice(-40)||"",
+    if(type==="vpc")return vpcs.map(v=>({id:v.id,label:v.name||v.id,status:v.is_default?"default":"custom",region:v.region,detail:v.cidr,environment:v.environment||"",project:v.project||"",owner:v.owner||"",actions:null}))
+    if(type==="lambda")return lambdas.map(l=>({id:l.name,label:l.name,status:"active",region:l.region,detail:l.runtime+" - "+l.size_kb+" KB",environment:l.environment||"",project:l.project||"",owner:l.owner||"",actions:null}))
+    if(type==="elb")return lbs.map(lb=>({id:lb.name,label:lb.name,status:lb.state,region:lb.region,detail:lb.type,environment:lb.environment||"",project:lb.project||"",owner:lb.owner||"",actions:null}))
+    if(type==="iam")return iamRoles.map(r=>({id:r.name,label:r.name,status:r.type,region:"global",detail:r.arn?.slice(-40)||"",environment:"",project:"",owner:"",
       actions:<button onClick={()=>handleDeleteRole(r.name)} style={{padding:"3px 10px",borderRadius:"6px",fontSize:"11px",cursor:"pointer",border:"1px solid #f43f5e40",background:"#f43f5e15",color:"#f43f5e"}}>Delete</button>}))
-    if(type==="keypairs")return keypairs.map(kp=>({id:kp.name,label:kp.name,status:kp.type||"rsa",region:kp.region||"ap-south-1",detail:kp.id,
+    if(type==="keypairs")return keypairs.map(kp=>({id:kp.name,label:kp.name,status:kp.type||"rsa",region:kp.region||"ap-south-1",detail:kp.id,environment:"",project:"",owner:"",
       actions:<button onClick={()=>handleDeleteKP(kp.name,kp.region)} style={{padding:"3px 10px",borderRadius:"6px",fontSize:"11px",cursor:"pointer",border:"1px solid #f43f5e40",background:"#f43f5e15",color:"#f43f5e"}}>Delete</button>}))
-    if(type==="request")return reqs.map(r=>({id:r.id,label:r.resource_name,status:r.status,region:"--",detail:r.resource_type+" by "+r.username,actions:null}))
+    if(type==="request")return reqs.map(r=>({id:r.id,label:r.resource_name,status:r.status,region:"--",detail:r.resource_type+" by "+r.username,environment:"",project:"",owner:"",actions:null}))
     return []
   }
 
@@ -310,13 +325,19 @@ export default function Resources() {
                 <div style={{borderTop:"1px solid "+border}}>
                   {rows.length===0?<div style={{padding:"24px",textAlign:"center",color:muted,fontSize:"13px"}}>No {group.label.toLowerCase()} found</div>:(
                     <table style={{width:"100%",borderCollapse:"collapse"}}>
-                      <thead><tr style={{background:subtle}}>{["Name","Status","Region","Details","Actions"].map(h=><th key={h} style={{padding:"8px 16px",textAlign:"left",fontSize:"10px",fontWeight:"600",color:muted,textTransform:"uppercase"}}>{h}</th>)}</tr></thead>
-                      <tbody>{rows.map((row,i)=>{const sc=STATUS_COLORS[row.status]||"#64748b";return(
+                      <thead><tr style={{background:subtle}}>{["Name","Status","Environment","Project","Owner","Region","Details","Actions"].map(h=><th key={h} style={{padding:"8px 16px",textAlign:"left",fontSize:"10px",fontWeight:"600",color:muted,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+                      <tbody>{rows.map((row,i)=>{
+                        const sc=STATUS_COLORS[row.status]||"#64748b"
+                        const envColor={prod:"#f43f5e",staging:"#f59e0b",dev:"#00d4aa"}[row.environment]||"#64748b"
+                        return(
                         <tr key={i} style={{borderTop:"1px solid "+border}} onMouseEnter={e=>e.currentTarget.style.background=dark?"#ffffff04":"#f8fafc"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                          <td style={{padding:"11px 16px",fontSize:"12px",fontWeight:"600",color:text,maxWidth:"200px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.label}</td>
+                          <td style={{padding:"11px 16px",fontSize:"12px",fontWeight:"600",color:text,maxWidth:"180px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.label}</td>
                           <td style={{padding:"11px 16px"}}><span style={{background:sc+"15",color:sc,padding:"2px 8px",borderRadius:"20px",fontSize:"10px",fontWeight:"600"}}>{row.status}</span></td>
-                          <td style={{padding:"11px 16px",fontSize:"11px",color:muted}}>{row.region}</td>
-                          <td style={{padding:"11px 16px",fontSize:"11px",color:muted,maxWidth:"200px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.detail}</td>
+                          <td style={{padding:"11px 16px"}}>{row.environment?<span style={{background:envColor+"18",color:envColor,border:"1px solid "+envColor+"40",padding:"1px 8px",borderRadius:"6px",fontSize:"10px",fontWeight:"700",textTransform:"uppercase"}}>{row.environment}</span>:<span style={{color:muted,fontSize:"11px"}}>—</span>}</td>
+                          <td style={{padding:"11px 16px",fontSize:"11px",color:row.project?text:muted,maxWidth:"120px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.project||"—"}</td>
+                          <td style={{padding:"11px 16px",fontSize:"11px",color:row.owner?text:muted,maxWidth:"120px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.owner||"—"}</td>
+                          <td style={{padding:"11px 16px",fontSize:"11px",color:muted,whiteSpace:"nowrap"}}>{row.region}</td>
+                          <td style={{padding:"11px 16px",fontSize:"11px",color:muted,maxWidth:"160px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.detail}</td>
                           <td style={{padding:"11px 16px"}}>{row.actions}</td>
                         </tr>
                       )})}</tbody>
@@ -338,21 +359,42 @@ export default function Resources() {
       {/* S3 Modal */}
       {showS3Modal&&(
         <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:"20px"}}>
-          <div style={{background:surface,borderRadius:"14px",border:"1px solid "+border,width:"100%",maxWidth:"440px"}}>
-            <div style={{padding:"18px 24px",borderBottom:"1px solid "+border,display:"flex",justifyContent:"space-between"}}><div style={{fontSize:"15px",fontWeight:"600",color:text}}>Create S3 Bucket</div><button onClick={()=>setS3Modal(false)} style={{background:"none",border:"none",cursor:"pointer",fontSize:"20px",color:muted}}>x</button></div>
+          <div style={{background:surface,borderRadius:"14px",border:"1px solid "+border,width:"100%",maxWidth:"480px",maxHeight:"92vh",overflow:"auto"}}>
+            <div style={{padding:"18px 24px",borderBottom:"1px solid "+border,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div><div style={{fontSize:"15px",fontWeight:"600",color:text}}>Create S3 Bucket</div><div style={{fontSize:"12px",color:muted,marginTop:"2px"}}>Request will go for admin approval</div></div>
+              <button onClick={()=>setS3Modal(false)} style={{background:"none",border:"none",cursor:"pointer",fontSize:"20px",color:muted}}>x</button>
+            </div>
             <div style={{padding:"18px 24px",display:"flex",flexDirection:"column",gap:"12px"}}>
               {s3Err&&<div style={{background:"#f43f5e15",color:"#f43f5e",padding:"10px",borderRadius:"8px",fontSize:"13px"}}>{s3Err}</div>}
-              <div><label style={{display:"block",fontSize:"12px",color:muted,marginBottom:"5px"}}>Bucket name</label><input style={inp} placeholder="my-bucket" value={s3Form.name} onChange={e=>setS3Form(p=>({...p,name:e.target.value.toLowerCase().replace(/[^a-z0-9-]/g,"")}))} /></div>
+              <div><label style={{display:"block",fontSize:"12px",color:muted,marginBottom:"5px"}}>Bucket name *</label><input style={inp} placeholder="my-bucket" value={s3Form.name} onChange={e=>setS3Form(p=>({...p,name:e.target.value.toLowerCase().replace(/[^a-z0-9-]/g,"")}))} /></div>
               <div><label style={{display:"block",fontSize:"12px",color:muted,marginBottom:"5px"}}>Region</label><select style={inp} value={s3Form.region} onChange={e=>setS3Form(p=>({...p,region:e.target.value}))}>{S3_REGIONS.map(r=><option key={r} value={r}>{r}</option>)}</select></div>
               <div style={{display:"flex",gap:"8px"}}>{[{v:"AES256",l:"SSE-S3"},{v:"aws:kms",l:"SSE-KMS"},{v:"none",l:"None"}].map(opt=><div key={opt.v} onClick={()=>setS3Form(p=>({...p,encryption:opt.v}))} style={{flex:1,padding:"8px",borderRadius:"8px",cursor:"pointer",border:"1px solid "+(s3Form.encryption===opt.v?"#00d4aa40":border),background:s3Form.encryption===opt.v?"#00d4aa10":surface,textAlign:"center"}}><div style={{fontSize:"12px",fontWeight:"600",color:s3Form.encryption===opt.v?"#00d4aa":text}}>{opt.l}</div></div>)}</div>
-              <div style={{display:"flex",gap:"20px"}}>
-                <label style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",fontSize:"12px",color:text}}><input type="checkbox" checked={s3Form.versioning} onChange={e=>setS3Form(p=>({...p,versioning:e.target.checked}))} />Versioning</label>
-                <label style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",fontSize:"12px",color:text}}><input type="checkbox" checked={s3Form.public} onChange={e=>setS3Form(p=>({...p,public:e.target.checked}))} />Public</label>
+              <label style={{display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",fontSize:"12px",color:text}}><input type="checkbox" checked={s3Form.versioning} onChange={e=>setS3Form(p=>({...p,versioning:e.target.checked}))} />Enable Versioning</label>
+              {/* ── Tags ── */}
+              <div style={{borderTop:"1px solid "+border,paddingTop:"12px"}}>
+                <div style={{fontSize:"12px",fontWeight:"600",color:text,marginBottom:"10px"}}>Tags (required)</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px",marginBottom:"10px"}}>
+                  <div><label style={{display:"block",fontSize:"11px",color:muted,marginBottom:"4px"}}>Project Name *</label><input style={inp} placeholder="AIonOS-Platform" value={s3Form.project} onChange={e=>setS3Form(p=>({...p,project:e.target.value}))} /></div>
+                  <div><label style={{display:"block",fontSize:"11px",color:muted,marginBottom:"4px"}}>Owner *</label><input style={inp} placeholder="akram-khan" value={s3Form.owner} onChange={e=>setS3Form(p=>({...p,owner:e.target.value}))} /></div>
+                </div>
+                <div><label style={{display:"block",fontSize:"11px",color:muted,marginBottom:"6px"}}>Environment *</label>
+                  <div style={{display:"flex",gap:"8px"}}>
+                    {["dev","staging","prod"].map(env=>(
+                      <button key={env} type="button" onClick={()=>setS3Form(p=>({...p,environment:env}))}
+                        style={{flex:1,padding:"7px",borderRadius:"8px",cursor:"pointer",fontSize:"12px",fontWeight:"600",
+                          border:"1px solid "+(s3Form.environment===env?"#00d4aa40":border),
+                          background:s3Form.environment===env?"#00d4aa15":surface,
+                          color:s3Form.environment===env?"#00d4aa":muted}}>
+                        {env}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
             <div style={{padding:"14px 24px",borderTop:"1px solid "+border,display:"flex",justifyContent:"flex-end",gap:"10px"}}>
               <button onClick={()=>setS3Modal(false)} style={{padding:"8px 16px",borderRadius:"8px",fontSize:"13px",cursor:"pointer",border:"1px solid "+border,background:"transparent",color:text}}>Cancel</button>
-              <button onClick={handleS3Create} disabled={s3Creating} style={{padding:"8px 16px",borderRadius:"8px",fontSize:"13px",fontWeight:"600",cursor:"pointer",border:"none",background:"#00d4aa",color:"#0a0f1e",opacity:s3Creating?0.7:1}}>{s3Creating?"Creating...":"Create"}</button>
+              <button onClick={handleS3Create} disabled={s3Creating} style={{padding:"8px 16px",borderRadius:"8px",fontSize:"13px",fontWeight:"600",cursor:"pointer",border:"none",background:"#00d4aa",color:"#0a0f1e",opacity:s3Creating?0.7:1}}>{s3Creating?"Submitting...":"Submit Request"}</button>
             </div>
           </div>
         </div>

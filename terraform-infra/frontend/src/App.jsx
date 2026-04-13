@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom"
 import { useTheme } from "./context/ThemeContext"
+import { ToastProvider } from "./context/ToastContext"
 import Login      from "./pages/Login"
 import Dashboard  from "./pages/Dashboard"
 import Compute    from "./pages/Compute"
@@ -12,6 +13,8 @@ import Storage    from "./pages/Storage"
 import Network    from "./pages/Network"
 import IAM        from "./pages/IAM"
 import Kubernetes from "./pages/Kubernetes"
+import TFState    from "./pages/TFState"
+import Pipeline   from "./pages/Pipeline"
 import Sidebar    from "./components/Sidebar"
 
 function PrivateLayout({ children }) {
@@ -30,20 +33,24 @@ function PrivateLayout({ children }) {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/login"      element={<Login />} />
-      <Route path="/"           element={<PrivateLayout><Dashboard /></PrivateLayout>} />
-      <Route path="/compute"    element={<PrivateLayout><Compute /></PrivateLayout>} />
-      <Route path="/approvals"  element={<PrivateLayout><Approvals /></PrivateLayout>} />
-      <Route path="/cost"       element={<PrivateLayout><Cost /></PrivateLayout>} />
-      <Route path="/eks"        element={<PrivateLayout><EKS /></PrivateLayout>} />
-      <Route path="/activity"   element={<PrivateLayout><Activity /></PrivateLayout>} />
-      <Route path="/resources"  element={<PrivateLayout><Resources /></PrivateLayout>} />
-      <Route path="/storage"    element={<PrivateLayout><Storage /></PrivateLayout>} />
-      <Route path="/network"    element={<PrivateLayout><Network /></PrivateLayout>} />
-      <Route path="/iam"        element={<PrivateLayout><IAM /></PrivateLayout>} />
-      <Route path="/kubernetes" element={<PrivateLayout><Kubernetes /></PrivateLayout>} />
-      <Route path="*"           element={<Navigate to="/" replace />} />
-    </Routes>
+    <ToastProvider>
+      <Routes>
+        <Route path="/login"      element={<Login />} />
+        <Route path="/"           element={<PrivateLayout><Dashboard /></PrivateLayout>} />
+        <Route path="/compute"    element={<PrivateLayout><Compute /></PrivateLayout>} />
+        <Route path="/approvals"  element={<PrivateLayout><Approvals /></PrivateLayout>} />
+        <Route path="/cost"       element={<PrivateLayout><Cost /></PrivateLayout>} />
+        <Route path="/eks"        element={<PrivateLayout><EKS /></PrivateLayout>} />
+        <Route path="/activity"   element={<PrivateLayout><Activity /></PrivateLayout>} />
+        <Route path="/resources"  element={<PrivateLayout><Resources /></PrivateLayout>} />
+        <Route path="/storage"    element={<PrivateLayout><Storage /></PrivateLayout>} />
+        <Route path="/network"    element={<PrivateLayout><Network /></PrivateLayout>} />
+        <Route path="/iam"        element={<PrivateLayout><IAM /></PrivateLayout>} />
+        <Route path="/kubernetes" element={<PrivateLayout><Kubernetes /></PrivateLayout>} />
+        <Route path="/tfstate"    element={<PrivateLayout><TFState /></PrivateLayout>} />
+        <Route path="/pipeline/:id" element={<PrivateLayout><Pipeline /></PrivateLayout>} />
+        <Route path="*"           element={<Navigate to="/" replace />} />
+      </Routes>
+    </ToastProvider>
   )
 }

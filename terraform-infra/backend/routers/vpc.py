@@ -56,6 +56,11 @@ class CreateSGRequest(BaseModel):
     rules_in:    Optional[List[dict]] = []
 
 
+class UpdateSGRulesRequest(BaseModel):
+    region:   str        = "ap-south-1"
+    rules_in: List[dict] = []
+
+
 # ── LIST VPCs ─────────────────────────────────────────────────────────────
 
 @router.get("/list")
@@ -88,9 +93,29 @@ def list_vpcs(region: str = "ap-south-1", user: User = Depends(get_current_user)
                     "available_ips": s["AvailableIpAddressCount"],
                 } for s in vpc_subs],
                 "security_groups": [{
-                    "id":   g["GroupId"],
-                    "name": g["GroupName"],
-                    "desc": g["Description"],
+                    "id":    g["GroupId"],
+                    "name":  g["GroupName"],
+                    "desc":  g["Description"],
+                    "rules_in": [
+                        {
+                            "protocol":  p.get("IpProtocol", "tcp"),
+                            "from_port": p.get("FromPort", 0),
+                            "to_port":   p.get("ToPort",   0),
+                            "cidr":      (p.get("IpRanges") or [{}])[0].get("CidrIp", "0.0.0.0/0"),
+                            "desc":      (p.get("IpRanges") or [{}])[0].get("Description", ""),
+                        }
+                        for p in g.get("IpPermissions", [])
+                        if (p.get("IpRanges") or [{"CidrIp": ""}])
+                    ],
+                    "rules_out": [
+                        {
+                            "protocol":  p.get("IpProtocol", "-1"),
+                            "from_port": p.get("FromPort", 0),
+                            "to_port":   p.get("ToPort",   0),
+                            "cidr":      (p.get("IpRanges") or [{}])[0].get("CidrIp", "0.0.0.0/0"),
+                        }
+                        for p in g.get("IpPermissionsEgress", [])
+                    ],
                 } for g in vpc_sgs],
             })
         return result
@@ -301,5 +326,55 @@ def delete_sg(sg_id: str, region: str = "ap-south-1", user: User = Depends(requi
     try:
         boto3.client("ec2", region_name=region).delete_security_group(GroupId=sg_id)
         return {"message": f"Security group {sg_id} deleted"}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ── UPDATE SG INBOUND RULES ───────────────────────────────────────────────
+
+@router.patch("/security-groups/{sg_id}/rules")
+def update_sg_rules(sg_id: str, body: UpdateSGRulesRequest, user: User = Depends(require_operator)):
+    """
+    Replace all inbound rules for a security group.
+    1. Revoke all existing inbound rules
+    2. Authorize the new rules supplied in body.rules_in
+    """
+    try:
+        ec2 = boto3.client("ec2", region_name=body.region)
+
+        # Fetch current rules to revoke them
+        sgs = ec2.describe_security_groups(GroupIds=[sg_id])["SecurityGroups"]
+        if not sgs:
+            raise HTTPException(404, f"Security group {sg_id} not found")
+        existing = sgs[0].get("IpPermissions", [])
+
+        # Revoke existing inbound rules (ignore errors if already gone)
+        if existing:
+            try:
+                ec2.revoke_security_group_ingress(GroupId=sg_id, IpPermissions=existing)
+            except Exception:
+                pass
+
+        # Build new permissions
+        new_perms = []
+        for r in body.rules_in:
+            protocol = r.get("protocol", "tcp")
+            perm: dict = {"IpProtocol": protocol}
+            if protocol != "-1":
+                perm["FromPort"] = int(r.get("from_port", 0))
+                perm["ToPort"]   = int(r.get("to_port",   r.get("from_port", 0)))
+            perm["IpRanges"] = [{
+                "CidrIp":      r.get("cidr", "0.0.0.0/0"),
+                "Description": r.get("desc", ""),
+            }]
+            new_perms.append(perm)
+
+        if new_perms:
+            ec2.authorize_security_group_ingress(GroupId=sg_id, IpPermissions=new_perms)
+
+        return {"message": f"Security group {sg_id} rules updated", "rules_count": len(new_perms)}
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))

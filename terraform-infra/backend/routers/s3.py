@@ -54,6 +54,11 @@ def list_buckets(user: User = Depends(get_current_user)):
                 rules = enc["ServerSideEncryptionConfiguration"]["Rules"]
                 info["encryption"] = rules[0]["ApplyServerSideEncryptionByDefault"]["SSEAlgorithm"]
             except Exception: pass
+            try:
+                tag_resp = s3.get_bucket_tagging(Bucket=name)
+                info["tags"] = {t["Key"]: t["Value"] for t in tag_resp.get("TagSet", [])}
+            except Exception:
+                info["tags"] = {}
             result.append(info)
         return result
     except Exception as e:

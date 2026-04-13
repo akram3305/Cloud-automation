@@ -13,10 +13,8 @@ router = APIRouter(prefix="/vms", tags=["vms"])
 
 @router.get("", response_model=list[VMOut])
 def list_vms(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    q = db.query(VM)
-    if user.role != "admin":
-        q = q.filter(VM.owner_id == user.id)
-    return q.order_by(VM.created_at.desc()).all()
+    # All authenticated users see all VMs (including AWS-discovered ones)
+    return db.query(VM).order_by(VM.created_at.desc()).all()
 
 
 @router.get("/{vm_id}", response_model=VMOut)

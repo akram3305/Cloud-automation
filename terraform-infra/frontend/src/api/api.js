@@ -36,6 +36,7 @@ export const getInstances = (params) => api.get("/cost/instances", { params })
 export const getCostOverview = () => api.get("/cost/overview")
 export const getDailyCost = () => api.get("/cost/daily")
 export const getServiceCost = () => api.get("/cost/services")
+export const getResourceCosts = () => api.get("/cost/resources")
 
 
 export const listBuckets      = ()             => api.get('/s3/buckets')
@@ -45,9 +46,11 @@ export const listObjects      = (bucket, prefix) => api.get('/s3/buckets/'+bucke
 export const deleteObject     = (bucket, key)  => api.delete('/s3/buckets/'+bucket+'/objects?key='+encodeURIComponent(key))
 export const getDownloadUrl   = (bucket, key)  => api.get('/s3/buckets/'+bucket+'/download', { params: { key } })
 export const getS3Stats = () => api.get('/s3/stats')
-export const listVPCs = () => api.get('/infra/vpcs')
-export const listLambdas = () => api.get('/infra/lambdas')
-export const listLoadBalancers = () => api.get('/infra/loadbalancers')
+export const listVPCs          = ()     => api.get('/infra/vpcs')
+export const listLambdas       = ()     => api.get('/infra/lambdas')
+export const listLoadBalancers = ()     => api.get('/infra/loadbalancers')
+export const listRDSInstances  = ()     => api.get('/infra/rds')
+export const listCloudWatchAlarms = ()  => api.get('/infra/cloudwatch')
 export const setSchedule = (id, autoStart, autoStop) => api.patch('/vms/'+id+'/set-schedule', { auto_start: autoStart, auto_stop: autoStop })
 export const listEKSClusters = () => api.get('/eks/clusters')
 export const getEKSPrereqs = (region) => api.get('/eks/prerequisites?region='+region)
@@ -63,6 +66,7 @@ export const deleteVPC = (id,r) => api.delete('/vpc/'+id+'?region='+(r||'ap-sout
 export const listSGs = (r,v) => api.get('/vpc/security-groups?region='+(r||'ap-south-1')+(v?'&vpc_id='+v:''))
 export const createSG = (d) => api.post('/vpc/security-groups/create',d)
 export const deleteSG = (id,r) => api.delete('/vpc/security-groups/'+id+'?region='+(r||'ap-south-1'))
+export const updateSGRules = (id, region, rules_in) => api.patch('/vpc/security-groups/'+id+'/rules', { region, rules_in })
 export const listIAMRoles = () => api.get('/iam/roles')
 export const listEKSRoles = () => api.get('/iam/roles/eks')
 export const createIAMRole = (d) => api.post('/iam/roles/create',d)
@@ -76,5 +80,15 @@ export default api
 
 
 
-export const getForecast = () => api.get('/cost/forecast')
-export const getVMCosts = () => api.get('/cost/vms/realtime')
+export const getForecast       = ()         => api.get('/cost/forecast')
+export const getVMCosts        = ()         => api.get('/cost/vms/realtime')
+export const getMonthlyCost    = (months=6) => api.get('/cost/monthly', { params: { months } })
+export const getActivityLogs   = (limit=50, hours=72) => api.get('/logs/activity', { params: { limit, hours } })
+
+export const setupEKSRoles    = ()                           => api.post('/eks/setup-roles')
+export const getPipeline      = (id)                         => api.get(`/requests/${id}/pipeline`)
+
+// ── Terraform State & Logs ─────────────────────────────────────────
+export const getEnvTFState = (env)                       => api.get(`/logs/state/${env}/tfstate`)
+export const getEnvLogs    = (env)                       => api.get(`/logs/state/${env}/logs`)
+export const getLogFile    = (env, reqId, filename)      => api.get(`/logs/state/${env}/logs/${reqId}/${filename}`)

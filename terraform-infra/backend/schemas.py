@@ -74,6 +74,9 @@ class VMOut(BaseModel):
     auto_start: Optional[str]
     auto_stop: Optional[str]
     created_at: datetime
+    environment: Optional[str] = "dev"
+    project_tag: Optional[str] = None
+    owner_tag:   Optional[str] = None
 
     class Config:
         from_attributes = True

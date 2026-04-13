@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { useTheme } from "../context/ThemeContext"
-import api from "../api/api"
+import api, { updateSGRules } from "../api/api"
+import { useToast } from "../context/ToastContext"
 
 const REGIONS = ["ap-south-1","us-east-1","us-east-2","eu-west-1","ap-southeast-1"]
 
@@ -71,6 +72,7 @@ function buildSubnetsFromPreset(preset, vpcCidr, vpcName, region) {
 
 export default function Network() {
   const { dark } = useTheme()
+  const toast = useToast()
   const [region, setRegion]       = useState("ap-south-1")
   const [vpcs, setVpcs]           = useState([])
   const [loading, setLoading]     = useState(true)
@@ -79,6 +81,11 @@ export default function Network() {
   const [success, setSuccess]     = useState("")
   const [error, setError]         = useState("")
   const [creating, setCreating]   = useState(false)
+
+  // SG inline-editing state
+  const [editingSG,    setEditingSG]    = useState(null)   // sg.id being edited
+  const [editRules,    setEditRules]    = useState([])     // draft inbound rules
+  const [savingSG,     setSavingSG]     = useState(false)
 
   const [showCreateVPC,    setCreateVPC]    = useState(false)
   const [showCreateSG,     setCreateSG]     = useState(false)
@@ -213,8 +220,51 @@ export default function Network() {
 
   async function handleDeleteSG(id) {
     if (!window.confirm(`Delete security group ${id}?`)) return
-    try { await api.delete(`/vpc/security-groups/${id}?region=${region}`); setSuccess("Security group deleted"); fetchVPCs(); setTimeout(()=>setSuccess(""),3000) }
-    catch(e) { alert(e.response?.data?.detail || e.message) }
+    try {
+      await api.delete(`/vpc/security-groups/${id}?region=${region}`)
+      toast.success("Security group deleted")
+      fetchVPCs()
+    } catch(e) { toast.error(e.response?.data?.detail || e.message) }
+  }
+
+  function startEditSG(sg) {
+    setEditingSG(sg.id)
+    setEditRules(sg.rules_in?.length
+      ? sg.rules_in.map(r => ({ ...r }))
+      : [{ protocol:"tcp", from_port:22, to_port:22, cidr:"0.0.0.0/0", desc:"SSH" }]
+    )
+  }
+
+  function cancelEditSG() { setEditingSG(null); setEditRules([]) }
+
+  function addRule() {
+    setEditRules(p => [...p, { protocol:"tcp", from_port:80, to_port:80, cidr:"0.0.0.0/0", desc:"" }])
+  }
+
+  function removeRule(i) { setEditRules(p => p.filter((_,idx) => idx !== i)) }
+
+  function updateRule(i, field, value) {
+    setEditRules(p => p.map((r, idx) => idx === i ? { ...r, [field]: value } : r))
+  }
+
+  async function handleSaveRules(sgId) {
+    setSavingSG(true)
+    const loadId = toast.loading("Updating security group rules…")
+    try {
+      await updateSGRules(sgId, region, editRules.map(r => ({
+        ...r,
+        from_port: parseInt(r.from_port) || 0,
+        to_port:   parseInt(r.to_port)   || parseInt(r.from_port) || 0,
+      })))
+      toast.dismiss(loadId)
+      toast.success("Rules updated successfully")
+      setEditingSG(null)
+      setEditRules([])
+      fetchVPCs()
+    } catch(e) {
+      toast.dismiss(loadId)
+      toast.error(e.response?.data?.detail || e.message)
+    } finally { setSavingSG(false) }
   }
 
   const tabBtn = (t) => ({ padding:"6px 14px", borderRadius:"8px", fontSize:"12px", fontWeight:"500", cursor:"pointer", border:"none", background:tab===t?"#00d4aa20":"transparent", color:tab===t?"#00d4aa":muted })
@@ -320,18 +370,176 @@ export default function Network() {
                 )}
                 {tab === "security-groups" && (
                   <>
-                    <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:"12px" }}>
-                      <button onClick={() => setCreateSG(true)} style={{ padding:"6px 14px", borderRadius:"8px", fontSize:"12px", fontWeight:"600", cursor:"pointer", border:"none", background:"#f59e0b", color:"#fff" }}>+ Security Group</button>
-                    </div>
-                    {selectedVPC.security_groups?.map(sg => (
-                      <div key={sg.id} style={{ border:"1px solid "+border, borderRadius:"10px", padding:"14px", marginBottom:"8px" }}>
-                        <div style={{ display:"flex", justifyContent:"space-between" }}>
-                          <div><span style={{ fontSize:"13px", fontWeight:"600", color:text }}>{sg.name}</span><span style={{ fontSize:"11px", color:muted, marginLeft:"8px" }}>{sg.id}</span></div>
-                          {sg.name !== "default" && <button onClick={() => handleDeleteSG(sg.id)} style={{ padding:"3px 8px", borderRadius:"6px", fontSize:"10px", cursor:"pointer", border:"1px solid #f43f5e40", background:"#f43f5e15", color:"#f43f5e" }}>Delete</button>}
-                        </div>
-                        <div style={{ fontSize:"11px", color:muted, marginTop:"4px" }}>{sg.desc}</div>
+                    <style>{`
+                      @keyframes sg-slide { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
+                      @keyframes sg-spin  { to{transform:rotate(360deg)} }
+                      .sg-rule-row:hover { background: ${dark?"rgba(255,255,255,0.04)":"rgba(0,0,0,0.03)"} !important; }
+                    `}</style>
+
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"14px" }}>
+                      <div style={{ fontSize:"12px", color:muted }}>
+                        {selectedVPC.security_groups?.length || 0} security group{selectedVPC.security_groups?.length !== 1 ? "s" : ""}
                       </div>
-                    ))}
+                      <button onClick={() => setCreateSG(true)}
+                        style={{ padding:"7px 16px", borderRadius:"8px", fontSize:"12px", fontWeight:"600", cursor:"pointer", border:"none", background:"linear-gradient(90deg,#f59e0b,#fbbf24)", color:"#1a0a00", boxShadow:"0 2px 8px rgba(245,158,11,0.3)", transition:"all 0.15s" }}
+                        onMouseEnter={e=>e.currentTarget.style.transform="translateY(-1px)"}
+                        onMouseLeave={e=>e.currentTarget.style.transform="translateY(0)"}
+                      >+ Security Group</button>
+                    </div>
+
+                    {(!selectedVPC.security_groups || selectedVPC.security_groups.length === 0) && (
+                      <div style={{ padding:"32px", textAlign:"center", color:muted, fontSize:"13px", border:"1px dashed "+border, borderRadius:"10px" }}>
+                        No security groups in this VPC
+                      </div>
+                    )}
+
+                    {selectedVPC.security_groups?.map((sg, idx) => {
+                      const isEditing = editingSG === sg.id
+                      const rules = isEditing ? editRules : (sg.rules_in || [])
+                      return (
+                        <div key={sg.id}
+                          style={{ border:`1px solid ${isEditing?"rgba(245,158,11,0.4)":border}`, borderRadius:"12px", marginBottom:"10px", overflow:"hidden", transition:"all 0.2s ease", boxShadow:isEditing?"0 0 0 1px rgba(245,158,11,0.2), 0 4px 16px rgba(0,0,0,0.15)":"none", animation:`sg-slide 0.25s ease ${idx*40}ms both` }}>
+
+                          {/* SG Header */}
+                          <div style={{ padding:"12px 16px", background:isEditing?(dark?"rgba(245,158,11,0.06)":"rgba(245,158,11,0.04)"):(dark?"rgba(255,255,255,0.02)":"#fafafa"), display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom:isEditing?`1px solid rgba(245,158,11,0.2)`:rules.length>0?`1px solid ${border}`:"none" }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:"10px" }}>
+                              <div style={{ width:"30px", height:"30px", borderRadius:"8px", background:isEditing?"rgba(245,158,11,0.15)":(dark?"rgba(255,255,255,0.06)":"rgba(0,0,0,0.05)"), display:"flex", alignItems:"center", justifyContent:"center" }}>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={isEditing?"#f59e0b":muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                                </svg>
+                              </div>
+                              <div>
+                                <div style={{ display:"flex", alignItems:"center", gap:"6px" }}>
+                                  <span style={{ fontSize:"13px", fontWeight:"600", color:text }}>{sg.name}</span>
+                                  {sg.name === "default" && <span style={{ fontSize:"9px", background:"#3b82f620", color:"#3b82f6", padding:"1px 6px", borderRadius:"4px", fontWeight:"600" }}>DEFAULT</span>}
+                                  {isEditing && <span style={{ fontSize:"9px", background:"rgba(245,158,11,0.2)", color:"#f59e0b", padding:"1px 6px", borderRadius:"4px", fontWeight:"600" }}>EDITING</span>}
+                                </div>
+                                <div style={{ fontSize:"11px", color:muted, marginTop:"1px" }}>{sg.id} · {rules.length} inbound rule{rules.length!==1?"s":""}</div>
+                              </div>
+                            </div>
+                            <div style={{ display:"flex", gap:"6px", alignItems:"center" }}>
+                              {!isEditing && (
+                                <button onClick={() => startEditSG(sg)}
+                                  style={{ padding:"4px 10px", borderRadius:"7px", fontSize:"11px", fontWeight:"600", cursor:"pointer", border:"1px solid rgba(245,158,11,0.3)", background:"rgba(245,158,11,0.1)", color:"#f59e0b", transition:"all 0.15s" }}
+                                  onMouseEnter={e=>e.currentTarget.style.background="rgba(245,158,11,0.2)"}
+                                  onMouseLeave={e=>e.currentTarget.style.background="rgba(245,158,11,0.1)"}>
+                                  ✏ Edit Rules
+                                </button>
+                              )}
+                              {isEditing && (
+                                <>
+                                  <button onClick={cancelEditSG}
+                                    style={{ padding:"4px 10px", borderRadius:"7px", fontSize:"11px", cursor:"pointer", border:`1px solid ${border}`, background:"transparent", color:muted }}>
+                                    Cancel
+                                  </button>
+                                  <button onClick={() => handleSaveRules(sg.id)} disabled={savingSG}
+                                    style={{ padding:"4px 12px", borderRadius:"7px", fontSize:"11px", fontWeight:"600", cursor:"pointer", border:"none", background:"#f59e0b", color:"#1a0a00", opacity:savingSG?0.7:1, display:"flex", alignItems:"center", gap:"5px" }}>
+                                    {savingSG
+                                      ? <><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{animation:"sg-spin 0.7s linear infinite"}}><path d="M21 12a9 9 0 11-18 0"/></svg> Saving…</>
+                                      : "✓ Save Rules"
+                                    }
+                                  </button>
+                                </>
+                              )}
+                              {!isEditing && sg.name !== "default" && (
+                                <button onClick={() => handleDeleteSG(sg.id)}
+                                  style={{ padding:"4px 8px", borderRadius:"7px", fontSize:"11px", cursor:"pointer", border:"1px solid rgba(244,63,94,0.3)", background:"rgba(244,63,94,0.08)", color:"#f43f5e", transition:"all 0.15s" }}
+                                  onMouseEnter={e=>e.currentTarget.style.background="rgba(244,63,94,0.18)"}
+                                  onMouseLeave={e=>e.currentTarget.style.background="rgba(244,63,94,0.08)"}>
+                                  ✕
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Rules view / edit */}
+                          {(rules.length > 0 || isEditing) && (
+                            <div style={{ padding:"10px 16px 12px" }}>
+
+                              {/* Quick presets (only in edit mode) */}
+                              {isEditing && (
+                                <div style={{ display:"flex", gap:"5px", flexWrap:"wrap", marginBottom:"10px" }}>
+                                  <span style={{ fontSize:"10px", color:muted, alignSelf:"center", marginRight:"2px" }}>Quick add:</span>
+                                  {[
+                                    { label:"SSH",   protocol:"tcp", port:22,   cidr:"0.0.0.0/0" },
+                                    { label:"HTTP",  protocol:"tcp", port:80,   cidr:"0.0.0.0/0" },
+                                    { label:"HTTPS", protocol:"tcp", port:443,  cidr:"0.0.0.0/0" },
+                                    { label:"RDP",   protocol:"tcp", port:3389, cidr:"0.0.0.0/0" },
+                                    { label:"MySQL", protocol:"tcp", port:3306, cidr:"0.0.0.0/0" },
+                                    { label:"PostgreSQL", protocol:"tcp", port:5432, cidr:"0.0.0.0/0" },
+                                    { label:"All traffic", protocol:"-1", port:0, cidr:"0.0.0.0/0" },
+                                  ].map(p => (
+                                    <button key={p.label}
+                                      onClick={() => setEditRules(prev => [...prev, { protocol:p.protocol, from_port:p.port, to_port:p.port, cidr:p.cidr, desc:p.label }])}
+                                      style={{ padding:"3px 9px", borderRadius:"6px", fontSize:"10px", fontWeight:"600", cursor:"pointer", border:`1px solid ${border}`, background:dark?"rgba(255,255,255,0.05)":"rgba(0,0,0,0.04)", color:muted, transition:"all 0.12s" }}
+                                      onMouseEnter={e=>{ e.currentTarget.style.borderColor="#f59e0b50"; e.currentTarget.style.color="#f59e0b" }}
+                                      onMouseLeave={e=>{ e.currentTarget.style.borderColor=border; e.currentTarget.style.color=muted }}>
+                                      +{p.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Column headers */}
+                              <div style={{ display:"grid", gridTemplateColumns:"80px 70px 70px 1fr 1fr"+(isEditing?" 28px":""), gap:"6px", padding:"4px 8px", marginBottom:"4px" }}>
+                                {["Protocol","From","To","CIDR","Description",...(isEditing?[""]:[])]
+                                  .map(h => <div key={h} style={{ fontSize:"9px", fontWeight:"700", color:muted, textTransform:"uppercase", letterSpacing:"0.06em" }}>{h}</div>)}
+                              </div>
+
+                              {/* Rule rows */}
+                              {(isEditing ? editRules : rules).map((r, ri) => (
+                                <div key={ri} className="sg-rule-row"
+                                  style={{ display:"grid", gridTemplateColumns:"80px 70px 70px 1fr 1fr"+(isEditing?" 28px":""), gap:"6px", padding:"5px 8px", borderRadius:"6px", marginBottom:"2px", transition:"background 0.12s", alignItems:"center" }}>
+                                  {isEditing ? (
+                                    <>
+                                      <select value={r.protocol} onChange={e=>updateRule(ri,"protocol",e.target.value)}
+                                        style={{ ...inp, fontSize:"11px", padding:"4px 6px" }}>
+                                        <option value="tcp">TCP</option>
+                                        <option value="udp">UDP</option>
+                                        <option value="icmp">ICMP</option>
+                                        <option value="-1">All</option>
+                                      </select>
+                                      <input type="number" value={r.from_port} onChange={e=>updateRule(ri,"from_port",e.target.value)}
+                                        style={{ ...inp, fontSize:"11px", padding:"4px 6px" }} placeholder="0" />
+                                      <input type="number" value={r.to_port} onChange={e=>updateRule(ri,"to_port",e.target.value)}
+                                        style={{ ...inp, fontSize:"11px", padding:"4px 6px" }} placeholder="0" />
+                                      <input value={r.cidr} onChange={e=>updateRule(ri,"cidr",e.target.value)}
+                                        style={{ ...inp, fontSize:"11px", padding:"4px 6px" }} placeholder="0.0.0.0/0" />
+                                      <input value={r.desc||""} onChange={e=>updateRule(ri,"desc",e.target.value)}
+                                        style={{ ...inp, fontSize:"11px", padding:"4px 6px" }} placeholder="Description" />
+                                      <button onClick={()=>removeRule(ri)}
+                                        style={{ width:"24px", height:"24px", borderRadius:"6px", cursor:"pointer", border:"1px solid rgba(244,63,94,0.3)", background:"rgba(244,63,94,0.1)", color:"#f43f5e", fontSize:"12px", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>×</button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span style={{ fontSize:"11px", fontFamily:"monospace", color:"#a78bfa", background:"rgba(167,139,250,0.1)", padding:"2px 6px", borderRadius:"4px", textAlign:"center" }}>{r.protocol === "-1" ? "All" : r.protocol.toUpperCase()}</span>
+                                      <span style={{ fontSize:"11px", color:muted, fontFamily:"monospace" }}>{r.from_port || "–"}</span>
+                                      <span style={{ fontSize:"11px", color:muted, fontFamily:"monospace" }}>{r.to_port || "–"}</span>
+                                      <span style={{ fontSize:"11px", color:"#00d4aa", fontFamily:"monospace" }}>{r.cidr}</span>
+                                      <span style={{ fontSize:"11px", color:muted }}>{r.desc || "—"}</span>
+                                    </>
+                                  )}
+                                </div>
+                              ))}
+
+                              {/* Add rule button (edit mode) */}
+                              {isEditing && (
+                                <button onClick={addRule}
+                                  style={{ marginTop:"6px", padding:"5px 14px", borderRadius:"7px", fontSize:"11px", fontWeight:"600", cursor:"pointer", border:`1px dashed ${border}`, background:"transparent", color:muted, width:"100%", transition:"all 0.15s" }}
+                                  onMouseEnter={e=>{ e.currentTarget.style.borderColor="#f59e0b50"; e.currentTarget.style.color="#f59e0b" }}
+                                  onMouseLeave={e=>{ e.currentTarget.style.borderColor=border; e.currentTarget.style.color=muted }}>
+                                  + Add Rule
+                                </button>
+                              )}
+
+                              {!isEditing && rules.length === 0 && (
+                                <div style={{ fontSize:"12px", color:muted, padding:"8px", textAlign:"center" }}>No inbound rules — click Edit Rules to add</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </>
                 )}
                 {tab === "info" && (
