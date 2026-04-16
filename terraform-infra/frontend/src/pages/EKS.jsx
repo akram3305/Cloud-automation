@@ -74,7 +74,10 @@ export default function EKS() {
     finally { setLoading(false) }
   }, [])
 
-  useEffect(() => { fetchData() }, [fetchData])
+  useEffect(() => {
+    fetchData()
+    loadPrereqs("ap-south-1")
+  }, [fetchData])
   useEffect(() => {
     const id = setInterval(fetchData, 15000)
     return () => clearInterval(id)
@@ -111,7 +114,8 @@ export default function EKS() {
   function openModal() {
     setShowModal(true)
     setError("")
-    loadPrereqs(form.region)
+    // prereqs already loaded on page mount — only refetch if not yet available
+    if (!prereqs) loadPrereqs(form.region)
   }
 
   function toggleSubnet(id) {

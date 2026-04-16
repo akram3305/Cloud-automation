@@ -71,7 +71,7 @@ def stop_vm(vm_id: int, db: Session = Depends(get_db), user: User = Depends(requ
 
 # ✅ FIXED DELETE API (ONLY CHANGE HERE 🚀)
 @router.delete("/{vm_id}", status_code=204)
-def delete_vm(vm_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def delete_vm(vm_id: int, db: Session = Depends(get_db), user: User = Depends(require_operator)):
     vm = db.query(VM).filter(VM.id == vm_id).first()
     if not vm:
         raise HTTPException(status_code=404, detail="VM not found")

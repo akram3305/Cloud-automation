@@ -298,10 +298,6 @@ export default function Storage() {
                         {b.encryption && b.encryption !== "none" && <span style={{ fontSize:"10px", background:"#00d4aa15", color:"#00d4aa", padding:"1px 6px", borderRadius:"4px" }}>{b.encryption==="AES256"?"SSE-S3":"SSE-KMS"}</span>}
                       </div>
                     </div>
-                    <button onClick={e => { e.stopPropagation(); handleDeleteBucket(b.name) }}
-                      style={{ background:"none", border:"none", cursor:"pointer", color:"#f43f5e", padding:"2px 6px", fontSize:"14px", flexShrink:0 }}>
-                      🗑️
-                    </button>
                   </div>
                 </div>
               ))}
@@ -393,10 +389,6 @@ export default function Storage() {
                                 <button onClick={() => handleDownload(f.key)} disabled={actionKey===f.key}
                                   style={{ padding:"4px 10px", borderRadius:"6px", fontSize:"11px", fontWeight:"500", cursor:"pointer", border:"1px solid #00d4aa40", background:"#00d4aa15", color:"#00d4aa" }}>
                                   {actionKey===f.key?"...":"Download"}
-                                </button>
-                                <button onClick={() => handleDeleteObject(f.key)} disabled={actionKey===f.key}
-                                  style={{ padding:"4px 10px", borderRadius:"6px", fontSize:"11px", fontWeight:"500", cursor:"pointer", border:"1px solid #f43f5e40", background:"#f43f5e15", color:"#f43f5e" }}>
-                                  Delete
                                 </button>
                               </div>
                             </td>

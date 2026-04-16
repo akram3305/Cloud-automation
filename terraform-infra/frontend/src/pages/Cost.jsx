@@ -13,8 +13,34 @@ import { useTheme } from "../context/ThemeContext"
 const COLORS = ["#00d4aa","#3b82f6","#a78bfa","#f59e0b","#f43f5e","#06b6d4","#84cc16","#fb923c"]
 const STATE_COLOR = { running:"#00d4aa", stopped:"#475569", pending:"#f59e0b", stopping:"#f43f5e" }
 
+const INR_RATE = 84   // 1 USD ≈ ₹84
+
 function fmt(n, dec = 2) {
   return typeof n === "number" ? n.toFixed(dec) : "0.00"
+}
+
+function fmtCur(n, currency = "USD", dec = 2) {
+  if (typeof n !== "number") return currency === "INR" ? "₹0.00" : "$0.00"
+  const val = currency === "INR" ? n * INR_RATE : n
+  const sym = currency === "INR" ? "₹" : "$"
+  return `${sym}${val.toFixed(dec)}`
+}
+
+function CurrencyToggle({ currency, setCurrency, surface, border, muted }) {
+  return (
+    <div style={{ display:"flex", background:surface, border:`1px solid ${border}`, borderRadius:8, padding:2, gap:2 }}>
+      {["USD","INR"].map(c => (
+        <button key={c} onClick={() => setCurrency(c)} style={{
+          padding:"5px 12px", borderRadius:6, border:"none", cursor:"pointer", fontSize:12, fontWeight:700,
+          background: currency === c ? "#00d4aa" : "transparent",
+          color:      currency === c ? "#0a0f1e" : muted,
+          transition:"all 0.2s ease",
+        }}>
+          {c === "USD" ? "$ USD" : "₹ INR"}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 function fmtMonth(ym) {
@@ -179,7 +205,7 @@ function MonthSkeleton({ surface, border }) {
    TAB 1 – OVERVIEW
    ════════════════════════════════════════════ */
 
-function OverviewTab({ overview, daily, services, forecast, vmCosts, dark, surface, border, text, muted, subtle }) {
+function OverviewTab({ overview, daily, services, forecast, vmCosts, dark, surface, border, text, muted, subtle, currency }) {
   const mtd = overview?.mtd_total || 0
   const fcTotal = overview?.forecast || 0
   const today = daily[daily.length - 1]?.amount || 0
@@ -189,10 +215,10 @@ function OverviewTab({ overview, daily, services, forecast, vmCosts, dark, surfa
   const totalRunningCost = runningVms.reduce((a,b) => a + b.cost_so_far, 0)
 
   const cards = [
-    { label:"MTD Actual Spend",   value:`$${fmt(mtd)}`,                                color:"#00d4aa", sub: overview?.period_start ? `Since ${overview.period_start}` : "This month",   live:true,  badge:"AWS BILLING" },
-    { label:"Real-Time EC2 Cost", value:`$${fmt(totalRunningCost, 4)}`,                color:"#3b82f6", sub: `${runningVms.length} instances running`,                                    live:true,  badge:"LIVE"        },
-    { label:"Month Forecast",     value:`$${fmt(fcTotal)}`,                            color:"#a78bfa", sub:"Projected end-of-month",                                                     live:false, badge:"FORECAST"    },
-    { label:"Today vs Yesterday", value:`${trend>=0?"+$":"-$"}${fmt(Math.abs(trend))}`,color:trend>=0?"#f43f5e":"#84cc16", sub:`Today: $${fmt(today)}`,                                  live:false, badge:"TREND"       },
+    { label:"MTD Actual Spend",   value: fmtCur(mtd, currency),                                          color:"#00d4aa", sub: overview?.period_start ? `Since ${overview.period_start}` : "This month",   live:true,  badge:"AWS BILLING" },
+    { label:"Real-Time EC2 Cost", value: fmtCur(totalRunningCost, currency, 4),                           color:"#3b82f6", sub: `${runningVms.length} instances running`,                                    live:true,  badge:"LIVE"        },
+    { label:"Month Forecast",     value: fmtCur(fcTotal, currency),                                       color:"#a78bfa", sub:"Projected end-of-month",                                                     live:false, badge:"FORECAST"    },
+    { label:"Today vs Yesterday", value:`${trend>=0?"+":"−"}${fmtCur(Math.abs(trend), currency)}`,        color:trend>=0?"#f43f5e":"#84cc16", sub:`Today: ${fmtCur(today, currency)}`,                       live:false, badge:"TREND"       },
   ]
 
   const tt = (props) => <ChartTooltip {...props} surface={surface} border={border} muted={muted} />
@@ -226,7 +252,7 @@ function OverviewTab({ overview, daily, services, forecast, vmCosts, dark, surfa
               <div style={{ fontSize:12, color:muted, marginTop:2 }}>Last 30 days — Cost Explorer</div>
             </div>
             <div style={{ background:"#00d4aa15", border:"1px solid #00d4aa30", borderRadius:8, padding:"3px 10px", fontSize:11, color:"#00d4aa", fontWeight:600 }}>
-              Total: ${fmt(daily.reduce((a,b) => a+b.amount, 0))}
+              Total: {fmtCur(daily.reduce((a,b) => a+b.amount, 0), currency)}
             </div>
           </div>
           <ResponsiveContainer width="100%" height={220}>
@@ -267,7 +293,7 @@ function OverviewTab({ overview, daily, services, forecast, vmCosts, dark, surfa
                     <span style={{ flex:1, fontSize:11, color:muted, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                       {s.service.replace("Amazon ","").replace("AWS ","")}
                     </span>
-                    <span style={{ fontSize:12, fontWeight:700, color:text }}>${s.amount}</span>
+                    <span style={{ fontSize:12, fontWeight:700, color:text }}>{fmtCur(s.amount, currency)}</span>
                   </div>
                 ))}
               </div>
@@ -317,7 +343,7 @@ function OverviewTab({ overview, daily, services, forecast, vmCosts, dark, surfa
               <div style={{ fontSize:12, color:muted, marginTop:2 }}>Ranked by MTD cost</div>
             </div>
             <span style={{ fontSize:12, color:muted }}>
-              Total: <span style={{ color:"#00d4aa", fontWeight:700 }}>${fmt(services.reduce((a,b)=>a+b.amount,0))}</span>
+              Total: <span style={{ color:"#00d4aa", fontWeight:700 }}>{fmtCur(services.reduce((a,b)=>a+b.amount,0), currency)}</span>
             </span>
           </div>
           {services.length === 0 ? (
@@ -353,7 +379,7 @@ function OverviewTab({ overview, daily, services, forecast, vmCosts, dark, surfa
    TAB 2 – 6 MONTHS
    ════════════════════════════════════════════ */
 
-function SixMonthTab({ surface, border, text, muted, subtle, dark }) {
+function SixMonthTab({ surface, border, text, muted, subtle, dark, currency }) {
   const [monthlyData, setMonthlyData] = useState([])
   const [loading6m, setLoading6m] = useState(true)
   const [err6m, setErr6m] = useState("")
@@ -408,9 +434,9 @@ function SixMonthTab({ surface, border, text, muted, subtle, dark }) {
       {/* Summary bar */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom:20 }}>
         {[
-          { label:"6-Month Total",      value:`$${fmt(sixMonthTotal)}`,        color:"#00d4aa", icon:"📊" },
-          { label:"Avg per Month",      value:`$${fmt(avgMonthly)}`,           color:"#3b82f6", icon:"📈" },
-          { label:"Highest Month",      value:`${fmtMonth(highestMonth?.month||"")} — $${fmt(highestMonth?.total||0)}`, color:"#f43f5e", icon:"🔺" },
+          { label:"6-Month Total",      value: fmtCur(sixMonthTotal, currency),                                                       color:"#00d4aa", icon:"📊" },
+          { label:"Avg per Month",      value: fmtCur(avgMonthly, currency),                                                          color:"#3b82f6", icon:"📈" },
+          { label:"Highest Month",      value:`${fmtMonth(highestMonth?.month||"")} — ${fmtCur(highestMonth?.total||0, currency)}`,    color:"#f43f5e", icon:"🔺" },
         ].map(({ label, value, color }, i) => (
           <div key={label} className="cost-card" style={{
             background: surface, border:`1px solid ${border}`, borderLeft:`3px solid ${color}`,
@@ -480,13 +506,13 @@ function SixMonthTab({ surface, border, text, muted, subtle, dark }) {
                 onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.paddingLeft="12px" }}
               >
                 <div style={{ fontSize:13, fontWeight:600, color:text }}>{fmtMonth(m.month)}</div>
-                <div style={{ fontSize:13, fontWeight:700, color:"#00d4aa", fontVariantNumeric:"tabular-nums" }}>${fmt(m.total)}</div>
+                <div style={{ fontSize:13, fontWeight:700, color:"#00d4aa", fontVariantNumeric:"tabular-nums" }}>{fmtCur(m.total, currency)}</div>
                 <div style={{ display:"flex", alignItems:"center", gap:5, overflow:"hidden" }}>
                   {topSvc && (
                     <>
                       <div style={{ width:6, height:6, borderRadius:"50%", background: COLORS[0], flexShrink:0 }} />
                       <span style={{ fontSize:11, color:muted, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                        {(topSvc.service||"").replace("Amazon ","").replace("AWS ","")} — <span style={{ color:text, fontWeight:600 }}>${fmt(topSvc.amount)}</span>
+                        {(topSvc.service||"").replace("Amazon ","").replace("AWS ","")} — <span style={{ color:text, fontWeight:600 }}>{fmtCur(topSvc.amount, currency)}</span>
                       </span>
                     </>
                   )}
@@ -513,19 +539,81 @@ function SixMonthTab({ surface, border, text, muted, subtle, dark }) {
         <MonthDetailModal
           month={detailMonth}
           surface={surface} border={border} text={text} muted={muted} dark={dark}
-          onClose={() => setDetailMonth(null)}
+          onClose={() => setDetailMonth(null)} currency={currency}
         />
       )}
     </div>
   )
 }
 
-function MonthDetailModal({ month, surface, border, text, muted, dark, onClose }) {
+function EC2InstanceModal({ month, surface, border, text, muted, dark, onClose, currency }) {
+  const [instances, setInstances] = useState([])
+  const [loading,   setLoading]   = useState(true)
+
+  useEffect(() => {
+    import("../api/api").then(({ getEC2InstanceCosts }) => {
+      getEC2InstanceCosts(month)
+        .then(res => setInstances(res.data?.instances || []))
+        .catch(() => setInstances([]))
+        .finally(() => setLoading(false))
+    })
+  }, [month])
+
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", backdropFilter:"blur(4px)", zIndex:10000, display:"flex", alignItems:"center", justifyContent:"center", padding:24, animation:"fadeIn 0.2s ease" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: dark ? "linear-gradient(145deg,#0f172a,#0a0f1e)" : "#ffffff", border:`1px solid ${border}`, borderRadius:20, width:"100%", maxWidth:680, maxHeight:"80vh", overflow:"auto", boxShadow:"0 32px 80px rgba(0,0,0,0.6)", animation:"fadeUp 0.25s cubic-bezier(0,0,0.2,1.3) both" }}>
+        <div style={{ padding:"18px 24px 14px", borderBottom:`1px solid ${border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <div>
+            <div style={{ fontSize:11, fontWeight:700, color:"#3b82f6", textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:4 }}>EC2 — Per Instance Breakdown</div>
+            <div style={{ fontSize:16, fontWeight:700, color:text }}>{month ? fmtMonth(month) : "Current Month"}</div>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"none", cursor:"pointer", color:muted, fontSize:20 }}>✕</button>
+        </div>
+        <div style={{ padding:"16px 24px 24px" }}>
+          {loading ? (
+            <div style={{ padding:32, textAlign:"center", color:muted }}>Loading instance data…</div>
+          ) : instances.length === 0 ? (
+            <div style={{ padding:32, textAlign:"center", color:muted, fontSize:13 }}>No per-instance data available. Enable resource-level cost tracking in AWS Cost Explorer.</div>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 0.8fr 1fr", gap:8, padding:"6px 10px", fontSize:10, fontWeight:700, color:muted, textTransform:"uppercase", letterSpacing:"0.06em" }}>
+                <div>Instance</div><div>Type</div><div>State</div><div>Region</div><div style={{ textAlign:"right" }}>Cost</div>
+              </div>
+              {instances.map((inst, i) => (
+                <div key={inst.instance_id} style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 0.8fr 1fr", gap:8, padding:"10px 10px", background: dark ? "rgba(255,255,255,0.03)" : "#f8fafc", border:`1px solid ${border}`, borderRadius:8, animation:`fadeUp 0.3s ease ${i*30}ms both` }}>
+                  <div>
+                    <div style={{ fontSize:12, fontWeight:600, color:text }}>{inst.name}</div>
+                    <div style={{ fontSize:10, color:muted, fontFamily:"monospace" }}>{inst.instance_id}</div>
+                  </div>
+                  <div style={{ fontSize:11, color:muted, alignSelf:"center" }}>{inst.instance_type}</div>
+                  <div style={{ fontSize:11, color: inst.state === "running" ? "#00d4aa" : muted, fontWeight:600, alignSelf:"center" }}>{inst.state}</div>
+                  <div style={{ fontSize:11, color:muted, alignSelf:"center" }}>{inst.region}</div>
+                  <div style={{ textAlign:"right", fontSize:13, fontWeight:700, color: inst.amount > 0 ? "#f43f5e" : muted, alignSelf:"center" }}>{fmtCur(inst.amount, currency, 4)}</div>
+                </div>
+              ))}
+              <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 0.8fr 1fr", gap:8, padding:"10px 10px", background:"linear-gradient(90deg,rgba(0,212,170,0.1),rgba(14,165,233,0.05))", border:"1px solid rgba(0,212,170,0.25)", borderRadius:8, marginTop:4 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:text }}>TOTAL ({instances.length} instances)</div>
+                <div /><div /><div />
+                <div style={{ textAlign:"right", fontSize:14, fontWeight:800, color:"#00d4aa" }}>{fmtCur(instances.reduce((a,b)=>a+b.amount,0), currency, 4)}</div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MonthDetailModal({ month, surface, border, text, muted, dark, onClose, currency }) {
   const services  = [...(month.services || [])].sort((a,b) => b.amount - a.amount)
   const total     = month.total || 0
   const maxAmt    = services[0]?.amount || 1
+  const [showEC2, setShowEC2] = useState(false)
+
+  const isEC2Svc = (svc) => (svc || "").toLowerCase().includes("elastic compute") || (svc || "").toLowerCase().includes("ec2")
 
   return (
+    <>
     <div
       onClick={onClose}
       style={{
@@ -552,7 +640,7 @@ function MonthDetailModal({ month, surface, border, text, muted, dark, onClose }
             </div>
             <div style={{ fontSize:20, fontWeight:700, color:text }}>{fmtMonth(month.month)}</div>
             <div style={{ fontSize:13, color:muted, marginTop:2 }}>
-              Total: <span style={{ color:"#00d4aa", fontWeight:700 }}>${fmt(total)}</span>
+              Total: <span style={{ color:"#00d4aa", fontWeight:700 }}>{fmtCur(total, currency)}</span>
               &nbsp;·&nbsp; {services.length} services billed
             </div>
           </div>
@@ -570,19 +658,24 @@ function MonthDetailModal({ month, surface, border, text, muted, dark, onClose }
                 const barPct = maxAmt > 0 ? (s.amount / maxAmt) * 100 : 0
                 const color  = COLORS[i % COLORS.length]
                 const svcShort = (s.service||"").replace("Amazon ","").replace("AWS ","")
+                const canDrill = isEC2Svc(s.service)
                 return (
-                  <div key={s.service} style={{
-                    background: dark ? "rgba(255,255,255,0.03)" : "#f8fafc",
-                    border:`1px solid ${border}`, borderRadius:10, padding:"12px 16px",
-                    animation:`fadeUp 0.3s ease ${i*35}ms both`,
-                  }}>
+                  <div key={s.service}
+                    onClick={canDrill ? () => setShowEC2(true) : undefined}
+                    style={{
+                      background: dark ? "rgba(255,255,255,0.03)" : "#f8fafc",
+                      border:`1px solid ${canDrill ? "#3b82f640" : border}`, borderRadius:10, padding:"12px 16px",
+                      animation:`fadeUp 0.3s ease ${i*35}ms both`,
+                      cursor: canDrill ? "pointer" : "default",
+                    }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
                       <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                         <div style={{ width:8, height:8, borderRadius:2, background:color, flexShrink:0 }} />
                         <span style={{ fontSize:13, fontWeight:500, color:text }}>{svcShort}</span>
+                        {canDrill && <span style={{ fontSize:9, background:"#3b82f620", color:"#3b82f6", border:"1px solid #3b82f640", borderRadius:4, padding:"1px 5px", fontWeight:700 }}>CLICK → INSTANCES</span>}
                       </div>
                       <div style={{ textAlign:"right" }}>
-                        <div style={{ fontSize:14, fontWeight:700, color:text, fontVariantNumeric:"tabular-nums" }}>${fmt(s.amount)}</div>
+                        <div style={{ fontSize:14, fontWeight:700, color:text, fontVariantNumeric:"tabular-nums" }}>{fmtCur(s.amount, currency)}</div>
                         <div style={{ fontSize:10, color:muted }}>{fmt(pct,1)}% of total</div>
                       </div>
                     </div>
@@ -606,13 +699,20 @@ function MonthDetailModal({ month, surface, border, text, muted, dark, onClose }
                 display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:4,
               }}>
                 <span style={{ fontSize:13, fontWeight:700, color:text }}>Total ({services.length} services)</span>
-                <span style={{ fontSize:18, fontWeight:800, color:"#00d4aa", fontVariantNumeric:"tabular-nums" }}>${fmt(total)}</span>
+                <span style={{ fontSize:18, fontWeight:800, color:"#00d4aa", fontVariantNumeric:"tabular-nums" }}>{fmtCur(total, currency)}</span>
               </div>
             </div>
           )}
         </div>
       </div>
     </div>
+    {showEC2 && (
+      <EC2InstanceModal
+        month={month.month} surface={surface} border={border} text={text} muted={muted} dark={dark}
+        onClose={() => setShowEC2(false)} currency={currency}
+      />
+    )}
+    </>
   )
 }
 
@@ -624,7 +724,7 @@ function MonthlyTooltipWrapper(props) {
    TAB 3 – PER RESOURCE
    ════════════════════════════════════════════ */
 
-function PerResourceTab({ vmCosts, surface, border, text, muted, subtle, dark }) {
+function PerResourceTab({ vmCosts, surface, border, text, muted, subtle, dark, currency }) {
   const runningVms = vmCosts.filter(v => v.state === "running")
   const totalRunningCost = runningVms.reduce((a,b) => a + b.cost_so_far, 0)
   const totalHourlyRate = runningVms.reduce((a,b) => a + b.cost_per_hour, 0)
@@ -638,10 +738,10 @@ function PerResourceTab({ vmCosts, surface, border, text, muted, subtle, dark })
       {/* Summary cards */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:20 }}>
         {[
-          { label:"Total Running Cost",   value:`$${fmt(totalRunningCost, 4)}`, color:"#f43f5e", sub:`${runningVms.length} instances active`, live:true  },
-          { label:"Running Hourly Rate",  value:`$${fmt(totalHourlyRate, 4)}/h`, color:"#f59e0b", sub:"All running combined",                live:true  },
-          { label:"Estimated Daily",      value:`$${fmt(dailyEstimate)}/day`,   color:"#3b82f6", sub:"At current running rate",             live:false },
-          { label:"Estimated Monthly",    value:`$${fmt(monthlyEstimate)}/mo`,  color:"#a78bfa", sub:"All VMs if running 24/7",             live:false },
+          { label:"Total Running Cost",   value: fmtCur(totalRunningCost, currency, 4),                    color:"#f43f5e", sub:`${runningVms.length} instances active`, live:true  },
+          { label:"Running Hourly Rate",  value:`${fmtCur(totalHourlyRate, currency, 4)}/h`,               color:"#f59e0b", sub:"All running combined",                live:true  },
+          { label:"Estimated Daily",      value:`${fmtCur(dailyEstimate, currency)}/day`,                  color:"#3b82f6", sub:"At current running rate",             live:false },
+          { label:"Estimated Monthly",    value:`${fmtCur(monthlyEstimate, currency)}/mo`,                 color:"#a78bfa", sub:"All VMs if running 24/7",             live:false },
         ].map(({ label, value, color, sub, live }, i) => (
           <div key={label} className="cost-card" style={{
             background: surface, border:`1px solid ${border}`, borderLeft:`3px solid ${color}`,
@@ -710,22 +810,22 @@ function PerResourceTab({ vmCosts, surface, border, text, muted, subtle, dark })
                     {vm.hours_running > 0 ? `${fmt(vm.hours_running, 1)}h` : "—"}
                   </div>
                   <div style={{ fontSize:13, fontWeight:700, color:vm.cost_so_far>0?"#f43f5e":muted, fontVariantNumeric:"tabular-nums" }}>
-                    {vm.cost_so_far > 0 ? `$${fmt(vm.cost_so_far, 4)}` : "—"}
+                    {vm.cost_so_far > 0 ? fmtCur(vm.cost_so_far, currency, 4) : "—"}
                   </div>
                   {/* $/hr with mini sparkline bar */}
                   <div>
                     <div style={{ fontSize:12, color:muted, fontVariantNumeric:"tabular-nums", marginBottom:4 }}>
-                      ${fmt(vm.cost_per_hour, 4)}
+                      {fmtCur(vm.cost_per_hour, currency, 4)}
                     </div>
                     <div style={{ height:3, background: dark ? "#1e293b" : "#e2e8f0", borderRadius:2, overflow:"hidden" }}>
                       <div style={{ width:`${barPct}%`, height:"100%", background:"linear-gradient(90deg,#3b82f6,#a78bfa)", borderRadius:2, transition:"width 0.8s ease" }} />
                     </div>
                   </div>
                   <div style={{ fontSize:12, color:text, fontVariantNumeric:"tabular-nums" }}>
-                    ${fmt(vm.cost_per_hour * 24)}
+                    {fmtCur(vm.cost_per_hour * 24, currency)}
                   </div>
                   <div style={{ fontSize:12, fontWeight:600, color:vm.estimated_monthly>100?"#f59e0b":text, fontVariantNumeric:"tabular-nums" }}>
-                    {vm.estimated_monthly > 0 ? `$${fmt(vm.estimated_monthly)}` : "—"}
+                    {vm.estimated_monthly > 0 ? fmtCur(vm.estimated_monthly, currency) : "—"}
                   </div>
                 </div>
               )
@@ -741,10 +841,10 @@ function PerResourceTab({ vmCosts, surface, border, text, muted, subtle, dark })
         }}>
           <div style={{ fontSize:12, fontWeight:700, color:text }}>TOTAL ({vmCosts.length} VMs)</div>
           <div /><div style={{ fontSize:11, color:muted }}>{runningVms.length} running</div><div />
-          <div style={{ fontSize:13, fontWeight:700, color:"#f43f5e" }}>${fmt(totalRunningCost, 4)}</div>
-          <div style={{ fontSize:12, fontWeight:700, color:"#3b82f6" }}>${fmt(totalHourlyRate, 4)}/h</div>
-          <div style={{ fontSize:12, fontWeight:700, color:"#3b82f6" }}>${fmt(dailyEstimate)}</div>
-          <div style={{ fontSize:12, fontWeight:700, color:"#f59e0b" }}>${fmt(monthlyEstimate)}/mo</div>
+          <div style={{ fontSize:13, fontWeight:700, color:"#f43f5e" }}>{fmtCur(totalRunningCost, currency, 4)}</div>
+          <div style={{ fontSize:12, fontWeight:700, color:"#3b82f6" }}>{fmtCur(totalHourlyRate, currency, 4)}/h</div>
+          <div style={{ fontSize:12, fontWeight:700, color:"#3b82f6" }}>{fmtCur(dailyEstimate, currency)}</div>
+          <div style={{ fontSize:12, fontWeight:700, color:"#f59e0b" }}>{fmtCur(monthlyEstimate, currency)}/mo</div>
         </div>
       </div>
     </div>
@@ -755,9 +855,10 @@ function PerResourceTab({ vmCosts, surface, border, text, muted, subtle, dark })
    TAB 4 – AWS RESOURCES (Cost Explorer)
    ════════════════════════════════════════════ */
 
-function AWSResourcesTab({ surface, border, text, muted, subtle, dark }) {
-  const [data,    setData]    = useState(null)
-  const [loading, setLoading] = useState(true)
+function AWSResourcesTab({ surface, border, text, muted, subtle, dark, currency }) {
+  const [data,      setData]      = useState(null)
+  const [loading,   setLoading]   = useState(true)
+  const [showEC2,   setShowEC2]   = useState(false)
 
   useEffect(() => {
     import("../api/api").then(({ getResourceCosts }) => {
@@ -767,6 +868,8 @@ function AWSResourcesTab({ surface, border, text, muted, subtle, dark }) {
         .finally(() => setLoading(false))
     })
   }, [])
+
+  const isEC2Svc = (svc) => (svc || "").toLowerCase().includes("elastic compute") || (svc || "").toLowerCase().includes("ec2")
 
   if (loading) return (
     <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
@@ -799,9 +902,12 @@ function AWSResourcesTab({ surface, border, text, muted, subtle, dark }) {
           </div>
           {period && <div style={{ fontSize:11, color:muted, marginTop:2 }}>{period}</div>}
         </div>
-        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
           <div style={{ background:"#00d4aa15", border:"1px solid #00d4aa30", borderRadius:8, padding:"6px 14px", fontSize:11, color:"#00d4aa" }}>
             {resources.length} services billed this month
+          </div>
+          <div style={{ fontSize:22, fontWeight:700, color:text }}>
+            {fmtCur(total, currency)} <span style={{ fontSize:13, fontWeight:400, color:muted }}>month-to-date</span>
           </div>
         </div>
       </div>
@@ -830,15 +936,21 @@ function AWSResourcesTab({ surface, border, text, muted, subtle, dark }) {
             const trendColor = r.trend_pct === null ? muted : r.trend_pct > 10 ? "#f43f5e" : r.trend_pct < -5 ? "#84cc16" : "#f59e0b"
             const trendLabel = r.trend_pct === null ? "N/A" : `${r.trend_pct > 0 ? "+" : ""}${r.trend_pct}%`
             const rowBg = i % 2 === 0 ? surface : subtle
+            const canDrill = isEC2Svc(r.service)
             return (
-              <div key={r.service} style={{ background:rowBg, border:`1px solid ${border}`, borderRadius:10, padding:"12px 18px", display:"grid", gridTemplateColumns:"2.5fr 1fr 1fr 1fr 0.8fr", gap:8, alignItems:"center", transition:"all 0.15s" }}>
+              <div key={r.service}
+                onClick={canDrill ? () => setShowEC2(true) : undefined}
+                style={{ background:rowBg, border:`1px solid ${canDrill ? "#3b82f640" : border}`, borderRadius:10, padding:"12px 18px", display:"grid", gridTemplateColumns:"2.5fr 1fr 1fr 1fr 0.8fr", gap:8, alignItems:"center", transition:"all 0.15s", cursor: canDrill ? "pointer" : "default" }}>
                 {/* Service name + icon */}
                 <div style={{ display:"flex", alignItems:"center", gap:10, minWidth:0 }}>
                   <div style={{ width:32, height:32, borderRadius:8, background: COLORS[i % COLORS.length]+"20", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16, flexShrink:0 }}>
                     {r.icon}
                   </div>
                   <div style={{ minWidth:0 }}>
-                    <div style={{ fontSize:13, fontWeight:600, color:text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{r.short_name}</div>
+                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                      <span style={{ fontSize:13, fontWeight:600, color:text, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{r.short_name}</span>
+                      {canDrill && <span style={{ fontSize:9, background:"#3b82f620", color:"#3b82f6", border:"1px solid #3b82f640", borderRadius:4, padding:"1px 5px", fontWeight:700, flexShrink:0 }}>PER INSTANCE →</span>}
+                    </div>
                     <div style={{ height:3, background: dark ? "#1e293b" : "#e2e8f0", borderRadius:2, marginTop:4, overflow:"hidden" }}>
                       <div style={{ width:`${barPct}%`, height:"100%", background:`linear-gradient(90deg,${COLORS[i % COLORS.length]},${COLORS[(i+2) % COLORS.length]})`, borderRadius:2, transition:"width 1s ease" }} />
                     </div>
@@ -846,7 +958,7 @@ function AWSResourcesTab({ surface, border, text, muted, subtle, dark }) {
                 </div>
                 {/* MTD Cost */}
                 <div style={{ textAlign:"right", fontSize:14, fontWeight:700, color:text, fontVariantNumeric:"tabular-nums" }}>
-                  ${r.amount >= 1 ? fmt(r.amount) : r.amount.toFixed(4)}
+                  {fmtCur(r.amount, currency, r.amount >= 1 ? 2 : 4)}
                 </div>
                 {/* Share */}
                 <div style={{ textAlign:"right" }}>
@@ -871,11 +983,17 @@ function AWSResourcesTab({ surface, border, text, muted, subtle, dark }) {
           {/* Footer */}
           <div style={{ background: dark ? "#0a0f1e" : "#f8fafc", border:`1px solid ${border}`, borderRadius:10, padding:"12px 18px", display:"grid", gridTemplateColumns:"2.5fr 1fr 1fr 1fr 0.8fr", gap:8, alignItems:"center", marginTop:4 }}>
             <div style={{ fontSize:12, fontWeight:700, color:text }}>TOTAL ({resources.length} services)</div>
-            <div style={{ textAlign:"right", fontSize:14, fontWeight:700, color:"#00d4aa" }}>${fmt(total)}</div>
+            <div style={{ textAlign:"right", fontSize:14, fontWeight:700, color:"#00d4aa" }}>{fmtCur(total, currency)}</div>
             <div style={{ textAlign:"right", fontSize:12, color:muted }}>100%</div>
             <div /><div />
           </div>
         </div>
+      )}
+      {showEC2 && (
+        <EC2InstanceModal
+          month={null} surface={surface} border={border} text={text} muted={muted} dark={dark}
+          onClose={() => setShowEC2(false)} currency={currency}
+        />
       )}
     </div>
   )
@@ -907,6 +1025,10 @@ export default function Cost() {
   const [spinning,  setSpinning]  = useState(false)
   const [err,       setErr]       = useState("")
   const [lastUpdate,setLastUpdate]= useState(null)
+  const [currency,  setCurrency]  = useState(() => localStorage.getItem("costCurrency") || "USD")
+
+  // Persist currency preference
+  const handleSetCurrency = (c) => { setCurrency(c); localStorage.setItem("costCurrency", c) }
 
   const vmIntervalRef = useRef(null)
 
@@ -1022,6 +1144,7 @@ export default function Cost() {
         </div>
         <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:6 }}>
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <CurrencyToggle currency={currency} setCurrency={handleSetCurrency} surface={surface} border={border} muted={muted} />
             <button
               onClick={fetchAll}
               disabled={spinning}
@@ -1084,22 +1207,26 @@ export default function Cost() {
           overview={overview} daily={daily} services={services}
           forecast={forecast} vmCosts={vmCosts}
           dark={dark} surface={surface} border={border} text={text} muted={muted} subtle={subtle}
+          currency={currency}
         />
       )}
       {activeTab === 1 && (
         <SixMonthTab
           dark={dark} surface={surface} border={border} text={text} muted={muted} subtle={subtle}
+          currency={currency}
         />
       )}
       {activeTab === 2 && (
         <PerResourceTab
           vmCosts={vmCosts}
           dark={dark} surface={surface} border={border} text={text} muted={muted} subtle={subtle}
+          currency={currency}
         />
       )}
       {activeTab === 3 && (
         <AWSResourcesTab
           dark={dark} surface={surface} border={border} text={text} muted={muted} subtle={subtle}
+          currency={currency}
         />
       )}
     </div>

@@ -22,7 +22,6 @@ const SERVICES = [
   { id:"lambda",     name:"Lambda Function", desc:"Run code serverless",      cat:"Compute",    color:"#f59e0b", ready:false, icon:"M13 10V3L4 14h7v7l9-11h-7z" },
   { id:"cloudfront", name:"CloudFront CDN",  desc:"Global content delivery",  cat:"Networking", color:"#06b6d4", ready:false, icon:"M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945" },
   { id:"elasticache",name:"ElastiCache",     desc:"In-memory caching",        cat:"Database",   color:"#ec4899", ready:false, icon:"M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7" },
-  { id:"eks",        name:"EKS Cluster",     desc:"Managed Kubernetes",       cat:"Compute",    color:"#06b6d4", ready:true,  icon:"M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" },
   { id:"sns",        name:"SNS Topic",       desc:"Push notifications",       cat:"Messaging",  color:"#f43f5e", ready:false, icon:"M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" },
   { id:"sqs",        name:"SQS Queue",       desc:"Managed message queuing",  cat:"Messaging",  color:"#84cc16", ready:false, icon:"M4 6h16M4 10h16M4 14h16M4 18h16" },
   { id:"security-group", name:"Security Group", desc:"Firewall rules", cat:"Networking", color:"#f97316", ready:true, icon:"M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" },
@@ -60,7 +59,7 @@ const EKS_INSTANCE_GROUPS = [
   ]},
 ]
 
-const K8S_VERSIONS = ["1.29","1.28","1.27","1.26"]
+const K8S_VERSIONS = ["1.35","1.34","1.33","1.32"]
 
 function LockIcon() {
   return <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{display:"inline",marginRight:"3px",verticalAlign:"middle"}}><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
@@ -102,7 +101,7 @@ export default function Resources() {
   const [iamCreating,setIAMC]      = useState(false)
   const [iamErr,setIAMErr]         = useState("")
   const [eksStep,setEksStep]       = useState(0)
-  const [eksForm,setEksForm]       = useState({name:"",region:"ap-south-1",kubernetes_version:"1.29",role_arn:"",subnet_ids:[],security_group_ids:[],node_instance_type:"t3.medium",node_count:2,min_nodes:1,max_nodes:5})
+  const [eksForm,setEksForm]       = useState({name:"",region:"ap-south-1",kubernetes_version:"1.32",role_arn:"",subnet_ids:[],security_group_ids:[],node_instance_type:"t3.medium",node_count:2,min_nodes:1,max_nodes:5})
   const [eksCreating,setEksC]      = useState(false)
   const [eksErr,setEksErr]         = useState("")
   const [prereqs,setPrereqs]       = useState(null)
@@ -238,17 +237,15 @@ export default function Resources() {
       </div>}))
     if(type==="s3")return s3.map(b=>({id:b.name,label:b.name,status:"active",region:b.region,detail:new Date(b.created).toLocaleDateString("en-IN"),
       environment:b.tags?.Environment||"",project:b.tags?.Project||"",owner:b.tags?.Owner||"",
-      actions:<button onClick={()=>handleDeleteBucket(b.name)} style={{padding:"3px 10px",borderRadius:"6px",fontSize:"11px",cursor:"pointer",border:"1px solid #f43f5e40",background:"#f43f5e15",color:"#f43f5e"}}>Delete</button>}))
+      actions:null}))
     if(type==="eks")return eksClusters.map(c=>({id:c.name,label:c.name,status:c.status,region:c.region,detail:`K8s ${c.version} — ${c.total_nodes||0} nodes`,
       environment:"",project:"",owner:"",
-      actions:<button onClick={()=>handleDeleteEKS(c.name,c.region)} style={{padding:"3px 10px",borderRadius:"6px",fontSize:"11px",cursor:"pointer",border:"1px solid #f43f5e40",background:"#f43f5e15",color:"#f43f5e"}}>Delete</button>}))
+      actions:null}))
     if(type==="vpc")return vpcs.map(v=>({id:v.id,label:v.name||v.id,status:v.is_default?"default":"custom",region:v.region,detail:v.cidr,environment:v.environment||"",project:v.project||"",owner:v.owner||"",actions:null}))
     if(type==="lambda")return lambdas.map(l=>({id:l.name,label:l.name,status:"active",region:l.region,detail:l.runtime+" - "+l.size_kb+" KB",environment:l.environment||"",project:l.project||"",owner:l.owner||"",actions:null}))
     if(type==="elb")return lbs.map(lb=>({id:lb.name,label:lb.name,status:lb.state,region:lb.region,detail:lb.type,environment:lb.environment||"",project:lb.project||"",owner:lb.owner||"",actions:null}))
-    if(type==="iam")return iamRoles.map(r=>({id:r.name,label:r.name,status:r.type,region:"global",detail:r.arn?.slice(-40)||"",environment:"",project:"",owner:"",
-      actions:<button onClick={()=>handleDeleteRole(r.name)} style={{padding:"3px 10px",borderRadius:"6px",fontSize:"11px",cursor:"pointer",border:"1px solid #f43f5e40",background:"#f43f5e15",color:"#f43f5e"}}>Delete</button>}))
-    if(type==="keypairs")return keypairs.map(kp=>({id:kp.name,label:kp.name,status:kp.type||"rsa",region:kp.region||"ap-south-1",detail:kp.id,environment:"",project:"",owner:"",
-      actions:<button onClick={()=>handleDeleteKP(kp.name,kp.region)} style={{padding:"3px 10px",borderRadius:"6px",fontSize:"11px",cursor:"pointer",border:"1px solid #f43f5e40",background:"#f43f5e15",color:"#f43f5e"}}>Delete</button>}))
+    if(type==="iam")return iamRoles.map(r=>({id:r.name,label:r.name,status:r.type,region:"global",detail:r.arn?.slice(-40)||"",environment:"",project:"",owner:"",actions:null}))
+    if(type==="keypairs")return keypairs.map(kp=>({id:kp.name,label:kp.name,status:kp.type||"rsa",region:kp.region||"ap-south-1",detail:kp.id,environment:"",project:"",owner:"",actions:null}))
     if(type==="request")return reqs.map(r=>({id:r.id,label:r.resource_name,status:r.status,region:"--",detail:r.resource_type+" by "+r.username,environment:"",project:"",owner:"",actions:null}))
     return []
   }
@@ -323,7 +320,78 @@ export default function Resources() {
               </div>
               {isExp&&isRev&&(
                 <div style={{borderTop:"1px solid "+border}}>
-                  {rows.length===0?<div style={{padding:"24px",textAlign:"center",color:muted,fontSize:"13px"}}>No {group.label.toLowerCase()} found</div>:(
+                  {rows.length===0 ? (
+                    <div style={{padding:"24px",textAlign:"center",color:muted,fontSize:"13px"}}>No {group.label.toLowerCase()} found</div>
+                  ) : group.type === "eks" ? (
+                    /* ── EKS card view — matches EKS.jsx style ── */
+                    <div style={{padding:"16px 20px",display:"flex",flexDirection:"column",gap:"12px"}}>
+                      {eksClusters.map((c,i)=>{
+                        const sc = STATUS_COLORS[c.status] || "#64748b"
+                        return (
+                          <div key={i} style={{background:subtle,border:"1px solid "+(c.status==="ACTIVE"?"#00d4aa30":border),borderRadius:"12px",padding:"16px 18px",transition:"all 0.2s",animation:`fadeUp 0.4s ease ${i*60}ms both`}}>
+                            {/* Cluster header */}
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"12px"}}>
+                              <div style={{display:"flex",gap:"12px",alignItems:"center"}}>
+                                <div style={{width:"40px",height:"40px",borderRadius:"10px",background:"#06b6d420",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"20px",flexShrink:0}}>⚙️</div>
+                                <div>
+                                  <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"5px",flexWrap:"wrap"}}>
+                                    <span style={{fontSize:"14px",fontWeight:"700",color:text}}>{c.name}</span>
+                                    <span style={{background:sc+"20",color:sc,padding:"2px 9px",borderRadius:"10px",fontSize:"11px",fontWeight:"600"}}>{c.status}</span>
+                                    <span style={{background:"#3b82f620",color:"#3b82f6",padding:"2px 9px",borderRadius:"10px",fontSize:"11px",fontWeight:"600"}}>K8s {c.version}</span>
+                                    <span style={{background:"#a78bfa20",color:"#a78bfa",padding:"2px 9px",borderRadius:"10px",fontSize:"11px"}}>{c.total_nodes||0} nodes</span>
+                                    {c.status==="CREATING"&&<span style={{display:"flex",alignItems:"center",gap:"5px",fontSize:"11px",color:"#3b82f6"}}><span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#3b82f6",display:"inline-block",animation:"pulse 1.5s infinite"}}/> Provisioning…</span>}
+                                  </div>
+                                  <div style={{fontSize:"12px",color:muted,display:"flex",alignItems:"center",gap:"12px",flexWrap:"wrap"}}>
+                                    <span>📍 {c.region}</span>
+                                    {c.endpoint && <span style={{fontFamily:"monospace",fontSize:"10px"}}>🔗 {c.endpoint.slice(0,48)}…</span>}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Node groups */}
+                            {c.node_groups && c.node_groups.length > 0 ? (
+                              <div style={{borderTop:"1px solid "+border,paddingTop:"10px"}}>
+                                <div style={{fontSize:"10px",fontWeight:"700",color:muted,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"8px"}}>
+                                  Node Groups ({c.node_groups.length})
+                                </div>
+                                <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                                  {c.node_groups.map((ng,ni)=>{
+                                    const ngc = STATUS_COLORS[ng.status]||"#64748b"
+                                    return (
+                                      <div key={ni} style={{background:dark?"rgba(255,255,255,0.03)":"#ffffff",border:"1px solid "+border,borderRadius:"8px",padding:"9px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"8px"}}>
+                                        <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                                          <span style={{fontSize:"14px"}}>🖥</span>
+                                          <div>
+                                            <div style={{fontSize:"12px",fontWeight:"600",color:text}}>{ng.name}</div>
+                                            <div style={{fontSize:"10px",color:muted}}>{ng.instance_type} · {ng.capacity_type||"ON_DEMAND"}</div>
+                                          </div>
+                                        </div>
+                                        <div style={{display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
+                                          <span style={{background:ngc+"20",color:ngc,padding:"2px 8px",borderRadius:"8px",fontSize:"10px",fontWeight:"600"}}>{ng.status}</span>
+                                          <div style={{fontSize:"11px",color:muted}}>
+                                            Desired <strong style={{color:text}}>{ng.desired}</strong>
+                                            <span style={{margin:"0 4px"}}>·</span>
+                                            Min <strong style={{color:text}}>{ng.min}</strong>
+                                            <span style={{margin:"0 4px"}}>·</span>
+                                            Max <strong style={{color:text}}>{ng.max}</strong>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              </div>
+                            ) : c.status === "ACTIVE" ? (
+                              <div style={{borderTop:"1px solid "+border,paddingTop:"8px",fontSize:"11px",color:muted}}>
+                                No node groups found — may still be provisioning. Auto-refreshes every 10s.
+                              </div>
+                            ) : null}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
                     <table style={{width:"100%",borderCollapse:"collapse"}}>
                       <thead><tr style={{background:subtle}}>{["Name","Status","Environment","Project","Owner","Region","Details","Actions"].map(h=><th key={h} style={{padding:"8px 16px",textAlign:"left",fontSize:"10px",fontWeight:"600",color:muted,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
                       <tbody>{rows.map((row,i)=>{

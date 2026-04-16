@@ -32,6 +32,7 @@ from routers import iam
 from routers import approvals
 from routers import terraform
 from routers import sync
+from routers import alerts
 
 # ──────────────────────────────────────────────────────────────────────────
 # DATABASE SETUP
@@ -148,6 +149,7 @@ app.include_router(iam.router)
 app.include_router(approvals.router)
 app.include_router(terraform.router)
 app.include_router(sync.router)
+app.include_router(alerts.router)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -195,18 +197,20 @@ def auto_sync_loop():
             for region in SYNC_REGIONS:
                 try:
                     ec2  = boto3.client("ec2", region_name=region)
-                    # Sync ALL non-terminated instances (including AWS-console-created ones)
-                    resp = ec2.describe_instances(
-                        Filters=[
-                            {"Name": "instance-state-name",
-                             "Values": ["pending", "running", "stopping", "stopped"]},
-                        ]
+
+                    # ── Step 1: fetch all active (non-terminated) instances ──
+                    active_resp = ec2.describe_instances(
+                        Filters=[{"Name": "instance-state-name",
+                                  "Values": ["pending", "running", "stopping", "stopped"]}]
                     )
 
-                    for reservation in resp["Reservations"]:
+                    active_ids: set = set()
+
+                    for reservation in active_resp["Reservations"]:
                         for inst in reservation["Instances"]:
                             iid   = inst["InstanceId"]
                             state = inst["State"]["Name"]
+                            active_ids.add(iid)
                             tags  = inst.get("Tags", [])
 
                             def _tag(key, default=""):
@@ -253,6 +257,26 @@ def auto_sync_loop():
                                 )
                                 db.add(new_vm)
 
+                    # ── Step 2: remove DB entries for instances deleted in AWS ──
+                    # Any DB VM in this region whose instance_id is no longer active → delete it
+                    db_vms = db.query(VM).filter(VM.region == region).all()
+                    for db_vm in db_vms:
+                        if db_vm.instance_id and db_vm.instance_id not in active_ids:
+                            print(f"Sync: Removing {db_vm.instance_id} ({db_vm.name}) — deleted/terminated in AWS")
+                            db.delete(db_vm)
+
+                    # ── Step 3: also catch instances currently shutting-down/terminated ──
+                    term_resp = ec2.describe_instances(
+                        Filters=[{"Name": "instance-state-name",
+                                  "Values": ["terminated", "shutting-down"]}]
+                    )
+                    for reservation in term_resp["Reservations"]:
+                        for inst in reservation["Instances"]:
+                            vm = db.query(VM).filter(VM.instance_id == inst["InstanceId"]).first()
+                            if vm:
+                                print(f"Sync: Removing terminated instance {inst['InstanceId']} ({vm.name})")
+                                db.delete(vm)
+
                     db.commit()
 
                 except Exception as e:
@@ -279,6 +303,8 @@ print("✅ Auto-sync loop started")
 
 def scheduler_loop():
     import datetime as _dt
+    from models.alert import Alert
+
     while True:
         try:
             db = SessionLocal()
@@ -304,15 +330,35 @@ def scheduler_loop():
 
                     if start_t and start_t == now and vm.state == "stopped":
                         print(f"Scheduler: STARTING {vm.name} at {now}")
-                        ec2.start_instances(InstanceIds=[vm.instance_id])
-                        vm.state      = "pending"
-                        vm.start_time = _dt.datetime.utcnow()
+                        try:
+                            ec2.start_instances(InstanceIds=[vm.instance_id])
+                            vm.state      = "pending"
+                            vm.start_time = _dt.datetime.utcnow()
+                        except Exception as start_err:
+                            msg = f"Auto-start FAILED for '{vm.name}' (id={vm.instance_id}) at {now}: {start_err}"
+                            print(f"Scheduler alert: {msg}")
+                            db.add(Alert(
+                                vm_id      = vm.id,
+                                vm_name    = vm.name,
+                                alert_type = "scheduler_failure",
+                                message    = msg,
+                            ))
 
                     if stop_t and stop_t == now and vm.state == "running":
                         print(f"Scheduler: STOPPING {vm.name} at {now}")
-                        ec2.stop_instances(InstanceIds=[vm.instance_id])
-                        vm.state      = "stopping"
-                        vm.start_time = None
+                        try:
+                            ec2.stop_instances(InstanceIds=[vm.instance_id])
+                            vm.state      = "stopping"
+                            vm.start_time = None
+                        except Exception as stop_err:
+                            msg = f"Auto-stop FAILED for '{vm.name}' (id={vm.instance_id}) at {now}: {stop_err}"
+                            print(f"Scheduler alert: {msg}")
+                            db.add(Alert(
+                                vm_id      = vm.id,
+                                vm_name    = vm.name,
+                                alert_type = "scheduler_failure",
+                                message    = msg,
+                            ))
 
                 except Exception as e:
                     if "InvalidInstanceID" not in str(e) and "not found" not in str(e).lower():

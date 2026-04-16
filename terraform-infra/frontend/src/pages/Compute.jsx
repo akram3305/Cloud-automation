@@ -51,6 +51,10 @@ export default function Compute() {
   const [lastSync,  setLastSync]  = useState(null)
   const esRef = useRef(null)
 
+  const userRole = (() => { try { return JSON.parse(localStorage.getItem("user") || "{}").role || "viewer" } catch { return "viewer" } })()
+  const isViewer   = userRole === "viewer"
+  const isAdmin    = userRole === "admin"
+
   const surface = dark ? "#0f172a"  : "#ffffff"
   const bg      = dark ? "#070c18"  : "#f0f4f8"
   const border  = dark ? "#1e293b"  : "#e2e8f0"
@@ -163,10 +167,12 @@ export default function Compute() {
             </span>
           </div>
         </div>
-        <button onClick={() => setShowModal(true)} style={{ display:"flex", alignItems:"center", gap:"8px", background:"#00d4aa", color:"#0a0f1e", border:"none", padding:"10px 18px", borderRadius:"10px", fontSize:"13px", fontWeight:"600", cursor:"pointer" }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Create VM
-        </button>
+        {!isViewer && (
+          <button onClick={() => setShowModal(true)} style={{ display:"flex", alignItems:"center", gap:"8px", background:"#00d4aa", color:"#0a0f1e", border:"none", padding:"10px 18px", borderRadius:"10px", fontSize:"13px", fontWeight:"600", cursor:"pointer" }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Create VM
+          </button>
+        )}
       </div>
 
       {success && (
@@ -236,26 +242,24 @@ export default function Compute() {
                   <td style={{ padding:"14px 16px" }}><Badge state={vm.state} dark={dark} /></td>
                   <td style={{ padding:"14px 16px" }}>
                     <div style={{ display:"flex", gap:"6px", flexWrap:"wrap" }}>
-                      {vm.state==="stopped" && (
+                      {!isViewer && vm.state==="stopped" && (
                         <button onClick={()=>handleAction(startVM,vm.id)} disabled={actionId===vm.id}
                           style={{ padding:"5px 12px", borderRadius:"6px", fontSize:"11px", fontWeight:"500", cursor:"pointer", border:"1px solid #00d4aa40", background:"#00d4aa15", color:"#00d4aa" }}>
                           {actionId===vm.id?"...":"Start"}
                         </button>
                       )}
-                      {vm.state==="running" && (
+                      {!isViewer && vm.state==="running" && (
                         <button onClick={()=>handleAction(stopVM,vm.id)} disabled={actionId===vm.id}
                           style={{ padding:"5px 12px", borderRadius:"6px", fontSize:"11px", fontWeight:"500", cursor:"pointer", border:"1px solid #f59e0b40", background:"#f59e0b15", color:"#f59e0b" }}>
                           {actionId===vm.id?"...":"Stop"}
                         </button>
                       )}
                       <button onClick={()=>setConnVM(vm)} style={{ padding:"5px 12px", borderRadius:"6px", fontSize:"12px", cursor:"pointer", border:"1px solid #00d4aa40", background:"#00d4aa15", color:"#00d4aa" }}>Connect</button>
-                      <button onClick={()=>setSchedVM(vm)} style={{ padding:"5px 12px", borderRadius:"6px", fontSize:"12px", cursor:"pointer", border:"1px solid #3b82f640", background:"#3b82f615", color:"#3b82f6" }}>
-                        {(vm.auto_start||vm.auto_stop)?"Scheduled":"Schedule"}
-                      </button>
-                      <button onClick={()=>handleDelete(vm.id,vm.name)} disabled={actionId===vm.id}
-                        style={{ padding:"5px 12px", borderRadius:"6px", fontSize:"11px", fontWeight:"500", cursor:"pointer", border:"1px solid #f43f5e40", background:"#f43f5e15", color:"#f43f5e" }}>
-                        {actionId===vm.id?"...":"Delete"}
-                      </button>
+                      {!isViewer && (
+                        <button onClick={()=>setSchedVM(vm)} style={{ padding:"5px 12px", borderRadius:"6px", fontSize:"12px", cursor:"pointer", border:"1px solid #3b82f640", background:"#3b82f615", color:"#3b82f6" }}>
+                          {(vm.auto_start||vm.auto_stop)?"Scheduled":"Schedule"}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

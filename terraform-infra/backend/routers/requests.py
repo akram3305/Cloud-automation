@@ -19,7 +19,7 @@ from database import get_db
 from models.request import Request
 from models.vm import VM
 from models.user import User
-from routers.auth import get_current_user
+from routers.auth import get_current_user, require_operator
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 
@@ -115,7 +115,7 @@ def get_request(
 def create_request(
     body: CreateRequest,
     db:   Session = Depends(get_db),
-    user: User    = Depends(get_current_user)
+    user: User    = Depends(require_operator)
 ):
     """
     Create a new infrastructure request.
@@ -184,8 +184,8 @@ def approve_request(
     db:               Session          = Depends(get_db),
     user:             User             = Depends(get_current_user)
 ):
-    if user.role not in ("admin", "operator"):
-        raise HTTPException(403, "Admin or operator required")
+    if user.role != "admin":
+        raise HTTPException(403, "Only admin can approve requests")
 
     req = db.query(Request).filter(Request.id == request_id).first()
     if not req:
@@ -217,8 +217,8 @@ def reject_request(
     db:         Session       = Depends(get_db),
     user:       User          = Depends(get_current_user)
 ):
-    if user.role not in ("admin", "operator"):
-        raise HTTPException(403, "Admin or operator required")
+    if user.role != "admin":
+        raise HTTPException(403, "Only admin can reject requests")
 
     req = db.query(Request).filter(Request.id == request_id).first()
     if not req:

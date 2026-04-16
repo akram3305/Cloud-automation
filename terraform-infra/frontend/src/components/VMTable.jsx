@@ -44,7 +44,6 @@ export default function VMTable({ vms, onRefresh }) {
                     {vm.state==="stopped"&&<button onClick={()=>handleStart(vm.id)} disabled={loading===vm.id+"-start"} style={{padding:"5px 12px",borderRadius:"6px",fontSize:"12px",cursor:"pointer",border:"1px solid #00d4aa40",background:"#00d4aa15",color:"#00d4aa"}}>{loading===vm.id+"-start"?"...":"Start"}</button>}
                     {vm.state==="running"&&<button onClick={()=>handleStop(vm.id)} disabled={loading===vm.id+"-stop"} style={{padding:"5px 12px",borderRadius:"6px",fontSize:"12px",cursor:"pointer",border:"1px solid #f59e0b40",background:"#f59e0b15",color:"#f59e0b"}}>{loading===vm.id+"-stop"?"...":"Stop"}</button>}
                     <button onClick={()=>setSchedVM(vm)} style={{padding:"5px 12px",borderRadius:"6px",fontSize:"12px",cursor:"pointer",border:"1px solid #3b82f640",background:"#3b82f615",color:"#3b82f6"}}>{(vm.auto_start||vm.auto_stop)?"Scheduled":"Schedule"}</button>
-                    <button onClick={()=>handleDelete(vm.id,vm.name)} disabled={loading===vm.id+"-delete"} style={{padding:"5px 12px",borderRadius:"6px",fontSize:"12px",cursor:"pointer",border:"1px solid #f43f5e40",background:"#f43f5e15",color:"#f43f5e"}}>{loading===vm.id+"-delete"?"...":"Delete"}</button>
                   </div>
                 </td>
               </tr>

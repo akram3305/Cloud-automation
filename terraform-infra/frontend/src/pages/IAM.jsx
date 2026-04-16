@@ -146,9 +146,7 @@ export default function IAMPage() {
                           <td style={{ padding:"12px 16px" }}><span style={{ background:tc+"20", color:tc, padding:"2px 8px", borderRadius:"10px", fontSize:"11px", fontWeight:"600" }}>{r.type}</span></td>
                           <td style={{ padding:"12px 16px", fontSize:"11px", color:muted, maxWidth:"220px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.arn}</td>
                           <td style={{ padding:"12px 16px", fontSize:"11px", color:muted }}>{r.policies?.length||0} policies</td>
-                          <td style={{ padding:"12px 16px" }}>
-                            <button onClick={()=>handleDeleteRole(r.name)} style={{ padding:"3px 10px", borderRadius:"6px", fontSize:"11px", cursor:"pointer", border:"1px solid #f43f5e40", background:"#f43f5e15", color:"#f43f5e" }}>Delete</button>
-                          </td>
+                          <td style={{ padding:"12px 16px" }}></td>
                         </tr>
                       )
                     })}
@@ -190,9 +188,7 @@ export default function IAMPage() {
                           <td style={{ padding:"12px 16px", fontSize:"13px", fontWeight:"600", color:text }}>{kp.name}</td>
                           <td style={{ padding:"12px 16px", fontSize:"11px", fontFamily:"monospace", color:muted }}>{kp.id}</td>
                           <td style={{ padding:"12px 16px", fontSize:"11px", color:muted }}>{kp.type||"rsa"}</td>
-                          <td style={{ padding:"12px 16px" }}>
-                            <button onClick={()=>handleDeleteKP(kp.name)} style={{ padding:"3px 10px", borderRadius:"6px", fontSize:"11px", cursor:"pointer", border:"1px solid #f43f5e40", background:"#f43f5e15", color:"#f43f5e" }}>Delete</button>
-                          </td>
+                          <td style={{ padding:"12px 16px" }}></td>
                         </tr>
                       ))}
                     </tbody>

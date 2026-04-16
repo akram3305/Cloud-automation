@@ -237,7 +237,7 @@ def get_monthly_cost(months: int = 6, user: User = Depends(get_current_user)):
             result.append({
                 "month":    month,
                 "total":    round(total, 2),
-                "services": services[:6],
+                "services": services,   # all services for drilldown
             })
         return result
     except Exception as e:
@@ -367,3 +367,107 @@ def get_resource_costs(user: User = Depends(get_current_user)):
     except Exception as e:
         print(f"Resource cost error: {e}")
         return {"total": 0, "currency": "USD", "period": "", "resources": [], "error": str(e)}
+
+
+@router.get("/ec2/instances")
+def get_ec2_instance_costs(
+    month: Optional[str] = None,   # YYYY-MM, defaults to current month
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Per-EC2-instance cost breakdown using AWS Cost Explorer resource-level granularity.
+    Falls back to real-time DB pricing when CE resource data is unavailable.
+    """
+    try:
+        ce    = get_ce_client()
+        today = datetime.today()
+
+        if month:
+            y, m   = int(month[:4]), int(month[5:7])
+            start  = f"{y:04d}-{m:02d}-01"
+            import calendar
+            last_day = calendar.monthrange(y, m)[1]
+            end    = f"{y:04d}-{m:02d}-{last_day:02d}"
+            # Cap end at today if month is current
+            if end > today.strftime("%Y-%m-%d"):
+                end = today.strftime("%Y-%m-%d")
+        else:
+            start = today.replace(day=1).strftime("%Y-%m-%d")
+            end   = today.strftime("%Y-%m-%d")
+
+        if start == end:
+            # nothing to query yet
+            raise ValueError("No data — period start equals end")
+
+        resp = ce.get_cost_and_usage_with_resources(
+            TimePeriod={"Start": start, "End": end},
+            Granularity="MONTHLY",
+            Metrics=["UnblendedCost"],
+            Filter={
+                "Dimensions": {
+                    "Key": "SERVICE",
+                    "Values": ["Amazon Elastic Compute Cloud - Compute"],
+                }
+            },
+            GroupBy=[{"Type": "DIMENSION", "Key": "RESOURCE_ID"}],
+        )
+
+        instances = []
+        for period in resp["ResultsByTime"]:
+            for g in period["Groups"]:
+                resource_id = g["Keys"][0]
+                amt = float(g["Metrics"]["UnblendedCost"]["Amount"])
+                if amt < 0.0001:
+                    continue
+                # Try to match to a VM name from DB
+                vm = db.query(VM).filter(VM.instance_id == resource_id).first()
+                instances.append({
+                    "instance_id": resource_id,
+                    "name":        vm.name if vm else resource_id,
+                    "instance_type": vm.instance_type if vm else "—",
+                    "state":       vm.state if vm else "unknown",
+                    "region":      vm.region if vm else "—",
+                    "amount":      round(amt, 4),
+                })
+
+        instances.sort(key=lambda x: x["amount"], reverse=True)
+        total = sum(i["amount"] for i in instances)
+        return {
+            "period":    f"{start} → {end}",
+            "total":     round(total, 4),
+            "instances": instances,
+        }
+
+    except Exception as ce_err:
+        # CE resource-level might not be enabled — fall back to real-time DB data
+        print(f"EC2 instance CE error (falling back to realtime): {ce_err}")
+        pricing = {
+            "t2.micro":0.0116,"t2.medium":0.0464,"t2.large":0.0928,
+            "t3.micro":0.0104,"t3.small":0.0208,"t3.medium":0.0416,"t3.large":0.0832,
+            "t3a.medium":0.0376,"t3a.large":0.0752,"m5.large":0.096,
+        }
+        vms = db.query(VM).all()
+        instances = []
+        for vm in vms:
+            price = pricing.get(vm.instance_type, 0.0104)
+            hours = (
+                (datetime.utcnow() - vm.start_time).total_seconds() / 3600
+                if vm.state == "running" and vm.start_time else 0
+            )
+            instances.append({
+                "instance_id":   vm.instance_id or "—",
+                "name":          vm.name,
+                "instance_type": vm.instance_type or "—",
+                "state":         vm.state,
+                "region":        vm.region or "—",
+                "amount":        round(hours * price, 4),
+            })
+        instances.sort(key=lambda x: x["amount"], reverse=True)
+        total = sum(i["amount"] for i in instances)
+        return {
+            "period":    "realtime",
+            "total":     round(total, 4),
+            "instances": instances,
+            "source":    "realtime",
+        }

@@ -329,9 +329,6 @@ export default function Network() {
                   <div style={{ fontSize:"16px", fontWeight:"700", color:text }}>{selectedVPC.name}</div>
                   <div style={{ fontSize:"12px", color:muted }}>{selectedVPC.id} · {selectedVPC.cidr} · {selectedVPC.region}</div>
                 </div>
-                {!selectedVPC.default && (
-                  <button onClick={() => handleDeleteVPC(selectedVPC.id)} style={{ padding:"5px 12px", borderRadius:"6px", fontSize:"11px", cursor:"pointer", border:"1px solid #f43f5e40", background:"#f43f5e15", color:"#f43f5e" }}>Delete VPC</button>
-                )}
               </div>
               <div style={{ padding:"0 20px", borderBottom:"1px solid "+border, display:"flex", gap:"4px" }}>
                 {["subnets","security-groups","info"].map(t => (
@@ -441,7 +438,7 @@ export default function Network() {
                                   </button>
                                 </>
                               )}
-                              {!isEditing && sg.name !== "default" && (
+                              {false && (
                                 <button onClick={() => handleDeleteSG(sg.id)}
                                   style={{ padding:"4px 8px", borderRadius:"7px", fontSize:"11px", cursor:"pointer", border:"1px solid rgba(244,63,94,0.3)", background:"rgba(244,63,94,0.08)", color:"#f43f5e", transition:"all 0.15s" }}
                                   onMouseEnter={e=>e.currentTarget.style.background="rgba(244,63,94,0.18)"}
