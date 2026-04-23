@@ -169,6 +169,7 @@ def create_request(
     db.refresh(req)
 
     print(f"[req_{req.id}] Created: {body.resource_name} ({body.resource_type}) by {user.username}")
+    _notify_request_submitted(req.id, body.resource_name, body.resource_type, body.cloud_provider, user.username)
     return _serialize(req)
 
 
@@ -198,6 +199,7 @@ def approve_request(
     req.reject_reason = None
     db.commit()
 
+    _notify_request_approved(req.id, req.resource_name, req.username, user.username)
     background_tasks.add_task(_run_pipeline, request_id)
     return {
         "message":    f"Pipeline started for '{req.resource_name}'",
@@ -237,6 +239,7 @@ def reject_request(
     req.approved_by   = user.username
     db.commit()
 
+    _notify_request_rejected(req.id, req.resource_name, req.username, req.reject_reason, user.username)
     print(f"[req_{request_id}] Rejected by {user.username}")
     return {"message": "Request rejected", "request_id": request_id}
 
@@ -333,6 +336,14 @@ def _run_pipeline(request_id: int):
         payload["resource_name"] = req.resource_name
         payload["username"]      = req.username
 
+        # Determine which cloud provider this resource belongs to
+        if resource_type.startswith("gcp_") or resource_type.startswith("gke_"):
+            cloud = "gcp"
+        elif resource_type.startswith("azure_") or resource_type.startswith("aks_"):
+            cloud = "azure"
+        else:
+            cloud = "aws"
+
         _log("=" * 55)
         _log(f"Pipeline: {req.resource_name} ({resource_type}) → {env}")
         _log("=" * 55)
@@ -355,7 +366,7 @@ def _run_pipeline(request_id: int):
         # ── STEP 2: terraform init ────────────────────────────────────────
         pt.set_stage(request_id, "init", "running")
         _log("STEP 2/4: terraform init...")
-        init = run_terraform("init", env, request_id=request_id)
+        init = run_terraform("init", env, request_id=request_id, cloud=cloud)
         if not init["success"]:
             err = (init.get("error") or init.get("output") or "init failed")[:400]
             pt.set_stage(request_id, "init", "failed")
@@ -371,7 +382,7 @@ def _run_pipeline(request_id: int):
         pt.set_stage(request_id, "plan", "running")
         _update("planning")
         _log("STEP 3/4: terraform plan...")
-        plan = run_terraform("plan", env, request_id=request_id)
+        plan = run_terraform("plan", env, request_id=request_id, cloud=cloud)
 
         if not plan["success"]:
             err = (plan.get("error") or plan.get("output") or "plan failed")[:400]
@@ -393,7 +404,7 @@ def _run_pipeline(request_id: int):
         pt.set_stage(request_id, "apply", "running")
         _update("provisioning")
         _log("STEP 4/4: terraform apply...")
-        apply = run_terraform("apply", env, request_id=request_id)
+        apply = run_terraform("apply", env, request_id=request_id, cloud=cloud)
         apply_output = apply.get("output", "") + apply.get("error", "")
 
         if not apply["success"]:
@@ -402,8 +413,11 @@ def _run_pipeline(request_id: int):
             pt.fail_pipeline(request_id)
             _update("failed", f"terraform apply failed: {err}")
             _log(f"APPLY FAILED: {err}")
+            _notify_request_failed_bg(request_id, req.resource_name, req.username, err)
             # Archive logs even on failure for debugging
-            archive_to_s3(request_id, env, apply_output)
+            archive_to_s3(request_id, env, apply_output, cloud=cloud,
+                          resource_name=req.resource_name, resource_type=resource_type,
+                          username=req.username, status="failed")
             cleanup_workspace(request_id, env)
             return
 
@@ -457,12 +471,16 @@ def _run_pipeline(request_id: int):
 
         # ── Archive to S3 then cleanup local folder ───────────────────────
         _log("Archiving workspace to S3...")
-        archive_to_s3(request_id, env, apply_output)
+        archive_to_s3(request_id, env, apply_output, cloud=cloud,
+                      resource_name=req.resource_name, resource_type=resource_type,
+                      username=req.username, status="completed")
 
         _log("Cleaning up local workspace...")
         cleanup_workspace(request_id, env)
 
         pt.complete_pipeline(request_id)
+        _notify_request_completed_bg(request_id, req.resource_name, resource_type, cloud,
+                                     req.username, public_ip, instance_id)
         _log("=" * 55)
         _log("PIPELINE COMPLETE ✓")
         _log("=" * 55)
@@ -472,14 +490,24 @@ def _run_pipeline(request_id: int):
         _log(f"PIPELINE EXCEPTION: {e}\n{tb}")
         _update("failed", f"Pipeline exception: {str(e)[:400]}")
         pt.fail_pipeline(request_id)
+        try:
+            _exc_req2 = db.query(Request).filter(Request.id == request_id).first()
+            if _exc_req2:
+                _notify_request_failed_bg(request_id, _exc_req2.resource_name, _exc_req2.username, str(e)[:400])
+        except Exception:
+            pass
         # Try to archive and cleanup even on exception
         try:
-            archive_to_s3(request_id, _get_env(
-                db.query(Request).filter(Request.id == request_id).first()
-            ), apply_output)
-            cleanup_workspace(request_id, _get_env(
-                db.query(Request).filter(Request.id == request_id).first()
-            ))
+            _exc_req = db.query(Request).filter(Request.id == request_id).first()
+            _exc_env = _get_env(_exc_req) if _exc_req else "dev"
+            _exc_rt  = (_exc_req.resource_type or "") if _exc_req else ""
+            _exc_cloud = "gcp" if (_exc_rt.startswith("gcp_") or _exc_rt.startswith("gke_")) else "azure" if (_exc_rt.startswith("azure_") or _exc_rt.startswith("aks_")) else "aws"
+            archive_to_s3(request_id, _exc_env, apply_output, cloud=_exc_cloud,
+                          resource_name=_exc_req.resource_name if _exc_req else "",
+                          resource_type=_exc_rt,
+                          username=_exc_req.username if _exc_req else "",
+                          status="failed")
+            cleanup_workspace(request_id, _exc_env)
         except Exception:
             pass
     finally:
@@ -489,6 +517,69 @@ def _run_pipeline(request_id: int):
 # ──────────────────────────────────────────────────────────────────────────
 # PIPELINE STATE — live stage data for frontend visualization
 # ──────────────────────────────────────────────────────────────────────────
+
+# ── Notification helpers ───────────────────────────────────────────────────────
+
+def _notify_request_submitted(req_id, resource_name, resource_type, cloud, username):
+    try:
+        from services.notification_service import notify_request_submitted
+        from database import SessionLocal
+        _db = SessionLocal()
+        notify_request_submitted(_db, req_id=req_id, resource_name=resource_name,
+                                 resource_type=resource_type, cloud=cloud, username=username)
+        _db.close()
+    except Exception as e:
+        print(f"[Notify] request submitted error: {e}")
+
+
+def _notify_request_approved(req_id, resource_name, username, approved_by):
+    try:
+        from services.notification_service import notify_request_approved
+        from database import SessionLocal
+        _db = SessionLocal()
+        notify_request_approved(_db, req_id=req_id, resource_name=resource_name,
+                                username=username, approved_by=approved_by)
+        _db.close()
+    except Exception as e:
+        print(f"[Notify] request approved error: {e}")
+
+
+def _notify_request_rejected(req_id, resource_name, username, reason, rejected_by):
+    try:
+        from services.notification_service import notify_request_rejected
+        from database import SessionLocal
+        _db = SessionLocal()
+        notify_request_rejected(_db, req_id=req_id, resource_name=resource_name,
+                                username=username, reason=reason, rejected_by=rejected_by)
+        _db.close()
+    except Exception as e:
+        print(f"[Notify] request rejected error: {e}")
+
+
+def _notify_request_completed_bg(req_id, resource_name, resource_type, cloud, username, public_ip, instance_id):
+    try:
+        from services.notification_service import notify_request_completed
+        from database import SessionLocal
+        _db = SessionLocal()
+        notify_request_completed(_db, req_id=req_id, resource_name=resource_name,
+                                 resource_type=resource_type, cloud=cloud, username=username,
+                                 public_ip=public_ip, instance_id=instance_id)
+        _db.close()
+    except Exception as e:
+        print(f"[Notify] request completed error: {e}")
+
+
+def _notify_request_failed_bg(req_id, resource_name, username, error):
+    try:
+        from services.notification_service import notify_request_failed
+        from database import SessionLocal
+        _db = SessionLocal()
+        notify_request_failed(_db, req_id=req_id, resource_name=resource_name,
+                              username=username, error=error)
+        _db.close()
+    except Exception as e:
+        print(f"[Notify] request failed error: {e}")
+
 
 @router.get("/{request_id}/pipeline")
 def get_pipeline_state(

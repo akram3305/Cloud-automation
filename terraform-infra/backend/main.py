@@ -15,7 +15,7 @@ from datetime import datetime
 
 from core.config import settings
 from database import engine, Base, SessionLocal
-from models import User, VM, Request
+from models import User, VM, Request, GcpSshKey, AwsSshKey, BudgetConfig, BudgetAlertLog, VMUtilization, VMBudget, VMBudgetAlertLog
 from routers.auth import hash_password
 
 # ── Import all routers ─────────────────────────────────────────────────────
@@ -33,6 +33,12 @@ from routers import approvals
 from routers import terraform
 from routers import sync
 from routers import alerts
+from routers import azure_vms
+from routers import azure_storage
+from routers import gcp_compute
+from routers import gcp_kubernetes
+from routers import monitoring
+from services import gcp_client
 
 # ──────────────────────────────────────────────────────────────────────────
 # DATABASE SETUP
@@ -150,6 +156,11 @@ app.include_router(approvals.router)
 app.include_router(terraform.router)
 app.include_router(sync.router)
 app.include_router(alerts.router)
+app.include_router(azure_vms.router)
+app.include_router(azure_storage.router)
+app.include_router(gcp_compute.router)
+app.include_router(gcp_kubernetes.router)
+app.include_router(monitoring.router)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -334,6 +345,7 @@ def scheduler_loop():
                             ec2.start_instances(InstanceIds=[vm.instance_id])
                             vm.state      = "pending"
                             vm.start_time = _dt.datetime.utcnow()
+                            _sched_notify(db, "start", vm.name, "aws", vm.region, start_t, owner=vm.owner_username)
                         except Exception as start_err:
                             msg = f"Auto-start FAILED for '{vm.name}' (id={vm.instance_id}) at {now}: {start_err}"
                             print(f"Scheduler alert: {msg}")
@@ -343,6 +355,7 @@ def scheduler_loop():
                                 alert_type = "scheduler_failure",
                                 message    = msg,
                             ))
+                            _sched_notify_failed(db, "start", vm.name, "aws", vm.region, start_t, str(start_err))
 
                     if stop_t and stop_t == now and vm.state == "running":
                         print(f"Scheduler: STOPPING {vm.name} at {now}")
@@ -350,6 +363,7 @@ def scheduler_loop():
                             ec2.stop_instances(InstanceIds=[vm.instance_id])
                             vm.state      = "stopping"
                             vm.start_time = None
+                            _sched_notify(db, "stop", vm.name, "aws", vm.region, stop_t, owner=vm.owner_username)
                         except Exception as stop_err:
                             msg = f"Auto-stop FAILED for '{vm.name}' (id={vm.instance_id}) at {now}: {stop_err}"
                             print(f"Scheduler alert: {msg}")
@@ -359,6 +373,7 @@ def scheduler_loop():
                                 alert_type = "scheduler_failure",
                                 message    = msg,
                             ))
+                            _sched_notify_failed(db, "stop", vm.name, "aws", vm.region, stop_t, str(stop_err))
 
                 except Exception as e:
                     if "InvalidInstanceID" not in str(e) and "not found" not in str(e).lower():
@@ -373,3 +388,201 @@ def scheduler_loop():
 
 threading.Thread(target=scheduler_loop, daemon=True).start()
 print("✅ Scheduler loop started")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# AZURE SCHEDULER LOOP — auto start/stop Azure VMs via tags
+# ──────────────────────────────────────────────────────────────────────────
+
+def azure_scheduler_loop():
+    """
+    Check every 60 s for Azure VMs whose auto_start / auto_stop tags
+    match the current HH:MM and start or deallocate them accordingly.
+    Tags are set via POST /azure/vms/{rg}/{vm}/schedule.
+    """
+    from services.azure_client import get_compute_client, VALID_SUBSCRIPTIONS
+    import datetime as _dt
+
+    while True:
+        try:
+            now = _dt.datetime.now().strftime("%H:%M")
+            for sub in ("nonprod", "prod"):
+                try:
+                    compute = get_compute_client(sub)
+                    for vm in list(compute.virtual_machines.list_all()):
+                        tags = vm.tags or {}
+                        auto_start = (tags.get("auto_start") or "").strip()[:5]
+                        auto_stop  = (tags.get("auto_stop")  or "").strip()[:5]
+                        if not auto_start and not auto_stop:
+                            continue
+
+                        rg = vm.id.split("/resourceGroups/")[1].split("/")[0]
+                        try:
+                            iv = compute.virtual_machines.get(rg, vm.name, expand="instanceView")
+                            pstate = "unknown"
+                            for s in (iv.instance_view.statuses or []):
+                                if s.code and s.code.startswith("PowerState/"):
+                                    pstate = s.code.split("/")[1]; break
+                        except Exception:
+                            continue
+
+                        if auto_start == now and pstate == "deallocated":
+                            try:
+                                compute.virtual_machines.begin_start(rg, vm.name)
+                                print(f"☁ Azure Scheduler: STARTING {vm.name} [{sub}] at {now}")
+                                _sched_notify_bg("start", vm.name, "azure", rg, auto_start)
+                            except Exception as _ae:
+                                print(f"Azure scheduler start error [{vm.name}]: {_ae}")
+                                _sched_notify_failed_bg("start", vm.name, "azure", rg, auto_start, str(_ae))
+
+                        if auto_stop == now and pstate == "running":
+                            try:
+                                compute.virtual_machines.begin_deallocate(rg, vm.name)
+                                print(f"☁ Azure Scheduler: STOPPING {vm.name} [{sub}] at {now}")
+                                _sched_notify_bg("stop", vm.name, "azure", rg, auto_stop)
+                            except Exception as _ae:
+                                print(f"Azure scheduler stop error [{vm.name}]: {_ae}")
+                                _sched_notify_failed_bg("stop", vm.name, "azure", rg, auto_stop, str(_ae))
+
+                except Exception as e:
+                    print(f"Azure scheduler error [{sub}]: {e}")
+        except Exception as e:
+            print(f"Azure scheduler loop error: {e}")
+
+        time.sleep(60)   # check every minute
+
+
+threading.Thread(target=azure_scheduler_loop, daemon=True).start()
+print("✅ Azure scheduler loop started")
+
+
+def gcp_scheduler_loop():
+    import datetime as _dt
+
+    while True:
+        try:
+            if not gcp_client.CONFIGURED:
+                time.sleep(60)
+                continue
+
+            now = _dt.datetime.now().strftime("%H:%M")
+            instances = gcp_client.list_instances(zone="-")
+            for inst in instances:
+                labels = inst.get("labels", {}) or {}
+                auto_start = str(labels.get("auto_start", "")).strip()[:5].replace("-", ":")
+                auto_stop = str(labels.get("auto_stop", "")).strip()[:5].replace("-", ":")
+                if not auto_start and not auto_stop:
+                    continue
+
+                name = inst.get("name")
+                zone = inst.get("zone")
+                status = inst.get("status", "")
+                try:
+                    if auto_start == now and status in {"STOPPED", "TERMINATED", "SUSPENDED"}:
+                        try:
+                            gcp_client.start_instance(name=name, zone=zone)
+                            print(f"☁ GCP Scheduler: STARTING {name} [{zone}] at {now}")
+                            _sched_notify_bg("start", name, "gcp", zone, auto_start)
+                        except Exception as _ge:
+                            print(f"GCP scheduler start error [{name}]: {_ge}")
+                            _sched_notify_failed_bg("start", name, "gcp", zone, auto_start, str(_ge))
+
+                    if auto_stop == now and status == "RUNNING":
+                        try:
+                            gcp_client.stop_instance(name=name, zone=zone)
+                            print(f"☁ GCP Scheduler: STOPPING {name} [{zone}] at {now}")
+                            _sched_notify_bg("stop", name, "gcp", zone, auto_stop)
+                        except Exception as _ge:
+                            print(f"GCP scheduler stop error [{name}]: {_ge}")
+                            _sched_notify_failed_bg("stop", name, "gcp", zone, auto_stop, str(_ge))
+                except Exception as exc:
+                    print(f"GCP scheduler error [{name}/{zone}]: {exc}")
+        except Exception as exc:
+            print(f"GCP scheduler loop error: {exc}")
+
+        time.sleep(60)
+
+
+threading.Thread(target=gcp_scheduler_loop, daemon=True).start()
+print("✅ GCP scheduler loop started")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# MONITORING LOOP — VM utilization checks (every 30 min) + budget checks (every 60 min)
+# ──────────────────────────────────────────────────────────────────────────
+
+UTILIZATION_INTERVAL = 5 * 60    # 5 minutes
+BUDGET_INTERVAL      = 15 * 60   # 15 minutes
+
+
+def utilization_monitor_loop():
+    from services.monitoring_loop import run_utilization_check
+    time.sleep(30)  # brief startup delay — let the app fully boot first
+    while True:
+        try:
+            run_utilization_check()
+        except Exception as e:
+            print(f"Utilization monitor error: {e}")
+        time.sleep(UTILIZATION_INTERVAL)
+
+
+def budget_monitor_loop():
+    from services.monitoring_loop import run_budget_check
+    time.sleep(60)  # start after utilization loop
+    while True:
+        try:
+            run_budget_check()
+        except Exception as e:
+            print(f"Budget monitor error: {e}")
+        time.sleep(BUDGET_INTERVAL)
+
+
+threading.Thread(target=utilization_monitor_loop, daemon=True).start()
+threading.Thread(target=budget_monitor_loop,      daemon=True).start()
+print("✅ Monitoring loops started (utilization every 30 min, budget every 60 min)")
+
+
+# ── Scheduler notification helpers ────────────────────────────────────────────
+
+def _sched_notify(db, action, vm_name, cloud, region, schedule_time, owner=None):
+    """Called inline in AWS scheduler loop (already has a db session)."""
+    try:
+        from services.notification_service import notify_schedule_triggered
+        notify_schedule_triggered(db, action=action, vm_name=vm_name, cloud=cloud,
+                                  region=region or "", schedule_time=schedule_time)
+    except Exception as e:
+        print(f"[Notify] schedule triggered error: {e}")
+
+
+def _sched_notify_failed(db, action, vm_name, cloud, region, schedule_time, error):
+    """Called inline in AWS scheduler loop (already has a db session)."""
+    try:
+        from services.notification_service import notify_schedule_failed
+        notify_schedule_failed(db, action=action, vm_name=vm_name, cloud=cloud,
+                               region=region or "", schedule_time=schedule_time, error=error)
+    except Exception as e:
+        print(f"[Notify] schedule failed error: {e}")
+
+
+def _sched_notify_bg(action, vm_name, cloud, region, schedule_time):
+    """Called from Azure/GCP loops — creates its own DB session."""
+    try:
+        from services.notification_service import notify_schedule_triggered
+        _db = SessionLocal()
+        notify_schedule_triggered(_db, action=action, vm_name=vm_name, cloud=cloud,
+                                  region=region or "", schedule_time=schedule_time)
+        _db.close()
+    except Exception as e:
+        print(f"[Notify] schedule triggered error: {e}")
+
+
+def _sched_notify_failed_bg(action, vm_name, cloud, region, schedule_time, error):
+    """Called from Azure/GCP loops — creates its own DB session."""
+    try:
+        from services.notification_service import notify_schedule_failed
+        _db = SessionLocal()
+        notify_schedule_failed(_db, action=action, vm_name=vm_name, cloud=cloud,
+                               region=region or "", schedule_time=schedule_time, error=error)
+        _db.close()
+    except Exception as e:
+        print(f"[Notify] schedule failed error: {e}")

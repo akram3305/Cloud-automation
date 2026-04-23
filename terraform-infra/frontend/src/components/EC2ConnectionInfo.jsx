@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import { useTheme } from "../context/ThemeContext"
 import api from "../api/api"
+import { downloadKeypair } from "../api/api"
 import QuickUnlock from "./QuickUnlock"
 
 const AMI_USERS = {
@@ -40,16 +41,37 @@ function CopyButton({ text }) {
 
 export default function EC2ConnectionInfo({ vm, onClose }) {
   const { dark } = useTheme()
-  const [tab, setTab]         = useState("ssh")
-  const [polling, setPolling] = useState(!vm.public_ip)
-  const [currentVM, setVM]    = useState(vm)
-  const [attempts, setAttempts]= useState(0)
+  const [tab, setTab]             = useState("ssh")
+  const [polling, setPolling]     = useState(!vm.public_ip)
+  const [currentVM, setVM]        = useState(vm)
+  const [attempts, setAttempts]   = useState(0)
+  const [storedKey, setStoredKey] = useState(null)   // { private_key, filename }
+  const [keyLoading, setKeyLoading] = useState(false)
 
   const os = detectOS(currentVM.ami_id, "")
   const sshUser = AMI_USERS[os] || "ec2-user"
   const isWindows = os === "windows"
   const ip = currentVM.public_ip || currentVM.private_ip || "pending..."
   const keyFile = (currentVM.key_name || "keypair") + ".pem"
+
+  // Fetch stored key on mount
+  useEffect(() => {
+    if (!currentVM.key_name) return
+    downloadKeypair(currentVM.key_name)
+      .then(({ data }) => setStoredKey(data))
+      .catch(() => setStoredKey(null))
+  }, [currentVM.key_name])
+
+  function handleDownloadPem() {
+    if (!storedKey) return
+    const blob = new Blob([storedKey.private_key], { type: "text/plain" })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement("a")
+    a.href     = url
+    a.download = storedKey.filename || keyFile
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   const surface = dark?"#0f172a":"#ffffff"
   const border  = dark?"#1e293b":"#e2e8f0"
@@ -161,15 +183,38 @@ export default function EC2ConnectionInfo({ vm, onClose }) {
           {/* SSH Tab */}
           {tab==="ssh" && !isWindows && (
             <div>
-              <div style={{ background:"#3b82f610", border:"1px solid #3b82f630", borderRadius:"8px", padding:"12px 14px", marginBottom:"16px", fontSize:"12px" }}>
-                <div style={{ fontWeight:"600", color:"#3b82f6", marginBottom:"4px" }}>Prerequisites</div>
-                <div style={{ color:muted }}>1. Download your key pair file: <code style={{ color:"#00d4aa" }}>{keyFile}</code> (from IAM → Key Pairs section)</div>
-                <div style={{ color:muted }}>2. Move it to your SSH folder and set permissions</div>
-                <div style={{ color:muted }}>3. Instance must be in <strong style={{ color:"#00d4aa" }}>running</strong> state</div>
+              {/* Key download banner */}
+              <div style={{ marginBottom:"14px" }}>
+                {storedKey ? (
+                  <div style={{ background:"#00d4aa10", border:"1px solid #00d4aa30", borderRadius:"8px", padding:"12px 14px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                    <div>
+                      <div style={{ fontWeight:"600", color:"#00d4aa", fontSize:"12px", marginBottom:"2px" }}>Key pair found in server</div>
+                      <div style={{ fontSize:"11px", color:muted }}>Re-download <code style={{ color:"#00d4aa" }}>{storedKey.filename}</code> without regenerating</div>
+                    </div>
+                    <button onClick={handleDownloadPem} style={{ padding:"7px 16px", borderRadius:"8px", fontSize:"12px", fontWeight:"600", cursor:"pointer", border:"none", background:"#00d4aa", color:"#0a0f1e", whiteSpace:"nowrap" }}>
+                      ↓ Download .pem
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ background:"#f59e0b10", border:"1px solid #f59e0b30", borderRadius:"8px", padding:"12px 14px", fontSize:"12px" }}>
+                    <div style={{ fontWeight:"600", color:"#f59e0b", marginBottom:"2px" }}>No stored key found</div>
+                    <div style={{ color:muted }}>Go to <strong>IAM → Key Pairs</strong>, delete and recreate <code style={{ color:"#00d4aa" }}>{currentVM.key_name || "this key"}</code> — the new .pem will be saved for future downloads.</div>
+                  </div>
+                )}
               </div>
+
+              <div style={{ background:"#3b82f610", border:"1px solid #3b82f630", borderRadius:"8px", padding:"12px 14px", marginBottom:"16px", fontSize:"12px" }}>
+                <div style={{ fontWeight:"600", color:"#3b82f6", marginBottom:"6px" }}>How to connect</div>
+                <div style={{ color:muted, marginBottom:"3px" }}>1. Download <code style={{ color:"#00d4aa" }}>{keyFile}</code> using the button above</div>
+                <div style={{ color:muted, marginBottom:"3px" }}>2. Run the chmod command below to set correct permissions</div>
+                <div style={{ color:muted, marginBottom:"3px" }}>3. Use the full path to the .pem file in the SSH command</div>
+                <div style={{ color:muted }}>4. Instance must be in <strong style={{ color:"#00d4aa" }}>running</strong> state with a public IP</div>
+              </div>
+
               <QuickUnlock label="SSH Connection Commands" dark={dark} autoLockSeconds={120}>
-              <CodeBlock code={chmodCmd} label="Step 1 — Fix key permissions (run once)" />
-              <CodeBlock code={sshCmd} label="Step 2 — Connect via SSH" />
+              <CodeBlock code={`chmod 400 "${keyFile}"`} label="Step 1 — Fix key permissions (Linux/Mac — run once)" />
+              <CodeBlock code={`icacls "${keyFile}" /inheritance:r /grant:r "%USERNAME%:R"`} label="Step 1 — Fix key permissions (Windows PowerShell — run once)" />
+              <CodeBlock code={`ssh -i "${keyFile}" ${sshUser}@${ip}`} label="Step 2 — Connect via SSH (run from folder where .pem is saved)" />
               </QuickUnlock>
               <div style={{ background:subtle, borderRadius:"8px", padding:"14px", border:"1px solid "+border }}>
                 <div style={{ fontSize:"12px", fontWeight:"600", color:text, marginBottom:"8px" }}>Default credentials by OS</div>

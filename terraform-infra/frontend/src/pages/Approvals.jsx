@@ -22,7 +22,7 @@ const PIPELINE_STAGES = [
   { key:"generating", label:"Write TF",    sub:"Generating config",     color:"#8b5cf6" },
   { key:"init",       label:"TF Init",     sub:"Downloading providers", color:"#06b6d4" },
   { key:"plan",       label:"TF Plan",     sub:"Planning changes",      color:"#f59e0b" },
-  { key:"apply",      label:"TF Apply",    sub:"Provisioning AWS",      color:"#00d4aa" },
+  { key:"apply",      label:"TF Apply",    sub:"Provisioning...",        color:"#00d4aa" },
   { key:"complete",   label:"Complete",    sub:"Infrastructure ready",  color:"#10b981" },
 ]
 
@@ -76,6 +76,14 @@ function stageMap(dbStatus, ps = {}) {
                 : ["failed","plan_failed"].includes(dbStatus) ? "failed"
                 : "pending",
   }
+}
+
+function cloudLabel(resourceType) {
+  if (!resourceType) return "Cloud"
+  const r = resourceType.toLowerCase()
+  if (r.startsWith("gcp_") || r.startsWith("gke_")) return "GCP"
+  if (r.startsWith("azure_") || r.startsWith("aks_")) return "Azure"
+  return "AWS"
 }
 
 function logColor(msg) {
@@ -305,7 +313,9 @@ export default function Approvals() {
             <div style={{ fontSize:"13px", fontWeight: isRun ? "700" : "500", color: isPend ? muted : isRun ? color : isFail ? "#f43f5e" : text, lineHeight:1 }}>
               {stage.label}
             </div>
-            <div style={{ fontSize:"10px", color:muted, marginTop:"3px" }}>{stage.sub}</div>
+            <div style={{ fontSize:"10px", color:muted, marginTop:"3px" }}>
+              {stage.key === "apply" ? `Provisioning ${cloudLabel(pd?.resource_type)}` : stage.sub}
+            </div>
           </div>
           <div style={{ textAlign:"right", flexShrink:0, marginLeft:"8px" }}>
             {isDone  && <span style={{ fontSize:"11px", fontWeight:"600", color }}>done {dur ? `· ${fmt(dur)}` : ""}</span>}

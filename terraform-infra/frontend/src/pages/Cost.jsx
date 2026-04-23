@@ -852,13 +852,70 @@ function PerResourceTab({ vmCosts, surface, border, text, muted, subtle, dark, c
 }
 
 /* ════════════════════════════════════════════
+   SERVICE DETAIL MODAL
+   ════════════════════════════════════════════ */
+
+function ServiceDetailModal({ resource, total, surface, border, text, muted, dark, onClose, currency }) {
+  if (!resource) return null
+  const pct = total > 0 ? ((resource.amount / total) * 100).toFixed(1) : "0.0"
+  const trendColor = resource.trend_pct === null ? muted : resource.trend_pct > 10 ? "#f43f5e" : resource.trend_pct < -5 ? "#84cc16" : "#f59e0b"
+  const trendLabel = resource.trend_pct === null ? "No previous data" : `${resource.trend_pct > 0 ? "+" : ""}${resource.trend_pct}% vs last month`
+
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", backdropFilter:"blur(4px)", zIndex:10000, display:"flex", alignItems:"center", justifyContent:"center", padding:24, animation:"fadeIn 0.2s ease" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: dark ? "linear-gradient(145deg,#0f172a,#0a0f1e)" : "#ffffff", border:`1px solid ${border}`, borderRadius:20, width:"100%", maxWidth:480, boxShadow:"0 32px 80px rgba(0,0,0,0.5)", animation:"fadeUp 0.25s cubic-bezier(0,0,0.2,1.3) both" }}>
+        <div style={{ padding:"20px 24px 16px", borderBottom:`1px solid ${border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+            <div style={{ width:40, height:40, borderRadius:10, background:"#00d4aa20", display:"flex", alignItems:"center", justifyContent:"center", fontSize:20 }}>{resource.icon}</div>
+            <div>
+              <div style={{ fontSize:11, fontWeight:700, color:"#00d4aa", textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:3 }}>AWS Service</div>
+              <div style={{ fontSize:17, fontWeight:700, color:text }}>{resource.short_name || resource.service}</div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"none", cursor:"pointer", color:muted, fontSize:20 }}>✕</button>
+        </div>
+        <div style={{ padding:"20px 24px 24px", display:"flex", flexDirection:"column", gap:14 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            {[
+              { label:"MTD Cost",       value: fmtCur(resource.amount, currency, resource.amount >= 1 ? 2 : 4), color:"#00d4aa" },
+              { label:"Share of Total", value: `${pct}%`,                                                        color:"#3b82f6" },
+              { label:"vs Last Month",  value: trendLabel,                                                       color: trendColor },
+              { label:"Rank",           value: resource.rank !== undefined ? `#${resource.rank + 1} of services` : "—", color:"#a78bfa" },
+            ].map(m => (
+              <div key={m.label} style={{ background: dark?"rgba(255,255,255,0.03)":"#f8fafc", border:`1px solid ${border}`, borderRadius:10, padding:"14px 16px" }}>
+                <div style={{ fontSize:10, fontWeight:700, color:muted, textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:6 }}>{m.label}</div>
+                <div style={{ fontSize:15, fontWeight:700, color:m.color }}>{m.value}</div>
+              </div>
+            ))}
+          </div>
+          {/* Cost bar */}
+          <div style={{ background: dark?"rgba(255,255,255,0.03)":"#f8fafc", border:`1px solid ${border}`, borderRadius:10, padding:"14px 16px" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8 }}>
+              <span style={{ fontSize:11, color:muted, fontWeight:600 }}>Cost share of total billing</span>
+              <span style={{ fontSize:12, fontWeight:700, color:text }}>{pct}%</span>
+            </div>
+            <div style={{ height:6, background:dark?"rgba(255,255,255,0.06)":"#e2e8f0", borderRadius:4, overflow:"hidden" }}>
+              <div style={{ width:`${Math.min(parseFloat(pct), 100)}%`, height:"100%", background:"linear-gradient(90deg,#00d4aa,#3b82f6)", borderRadius:4, transition:"width 0.8s ease" }} />
+            </div>
+          </div>
+          <div style={{ fontSize:11, color:muted, textAlign:"center", paddingTop:4 }}>
+            Full service usage details are available in the AWS Cost Explorer console.
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ════════════════════════════════════════════
    TAB 4 – AWS RESOURCES (Cost Explorer)
    ════════════════════════════════════════════ */
 
 function AWSResourcesTab({ surface, border, text, muted, subtle, dark, currency }) {
-  const [data,      setData]      = useState(null)
-  const [loading,   setLoading]   = useState(true)
-  const [showEC2,   setShowEC2]   = useState(false)
+  const [data,            setData]            = useState(null)
+  const [loading,         setLoading]         = useState(true)
+  const [showEC2,         setShowEC2]         = useState(false)
+  const [selectedService, setSelectedService] = useState(null)
 
   useEffect(() => {
     import("../api/api").then(({ getResourceCosts }) => {
@@ -898,16 +955,13 @@ function AWSResourcesTab({ surface, border, text, muted, subtle, dark, currency 
         <div>
           <div style={{ fontSize:11, fontWeight:700, color:"#00d4aa", textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:4 }}>AWS Cost Explorer</div>
           <div style={{ fontSize:22, fontWeight:700, color:text }}>
-            ${fmt(total)} <span style={{ fontSize:13, fontWeight:400, color:muted }}>month-to-date</span>
+            {fmtCur(total, currency)} <span style={{ fontSize:13, fontWeight:400, color:muted }}>month-to-date</span>
           </div>
           {period && <div style={{ fontSize:11, color:muted, marginTop:2 }}>{period}</div>}
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
           <div style={{ background:"#00d4aa15", border:"1px solid #00d4aa30", borderRadius:8, padding:"6px 14px", fontSize:11, color:"#00d4aa" }}>
-            {resources.length} services billed this month
-          </div>
-          <div style={{ fontSize:22, fontWeight:700, color:text }}>
-            {fmtCur(total, currency)} <span style={{ fontSize:13, fontWeight:400, color:muted }}>month-to-date</span>
+            {resources.length} service{resources.length !== 1 ? "s" : ""} billed this month
           </div>
         </div>
       </div>
@@ -939,8 +993,8 @@ function AWSResourcesTab({ surface, border, text, muted, subtle, dark, currency 
             const canDrill = isEC2Svc(r.service)
             return (
               <div key={r.service}
-                onClick={canDrill ? () => setShowEC2(true) : undefined}
-                style={{ background:rowBg, border:`1px solid ${canDrill ? "#3b82f640" : border}`, borderRadius:10, padding:"12px 18px", display:"grid", gridTemplateColumns:"2.5fr 1fr 1fr 1fr 0.8fr", gap:8, alignItems:"center", transition:"all 0.15s", cursor: canDrill ? "pointer" : "default" }}>
+                onClick={() => canDrill ? setShowEC2(true) : setSelectedService(r)}
+                style={{ background:rowBg, border:`1px solid ${canDrill ? "#3b82f640" : border}`, borderRadius:10, padding:"12px 18px", display:"grid", gridTemplateColumns:"2.5fr 1fr 1fr 1fr 0.8fr", gap:8, alignItems:"center", transition:"all 0.15s", cursor: "pointer" }}>
                 {/* Service name + icon */}
                 <div style={{ display:"flex", alignItems:"center", gap:10, minWidth:0 }}>
                   <div style={{ width:32, height:32, borderRadius:8, background: COLORS[i % COLORS.length]+"20", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16, flexShrink:0 }}>
@@ -989,6 +1043,7 @@ function AWSResourcesTab({ surface, border, text, muted, subtle, dark, currency 
           </div>
         </div>
       )}
+      {selectedService && <ServiceDetailModal resource={{...selectedService, rank: resources.indexOf(selectedService)}} total={total} surface={surface} border={border} text={text} muted={muted} dark={dark} onClose={() => setSelectedService(null)} currency={currency} />}
       {showEC2 && (
         <EC2InstanceModal
           month={null} surface={surface} border={border} text={text} muted={muted} dark={dark}

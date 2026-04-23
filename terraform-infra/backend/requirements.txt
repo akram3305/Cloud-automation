@@ -9,3 +9,18 @@ boto3==1.34.0
 botocore==1.34.0
 python-multipart==0.0.6
 httpx==0.25.2
+
+# Azure SDK
+azure-identity==1.15.0
+azure-mgmt-compute==30.3.0
+azure-mgmt-network==25.3.0
+azure-mgmt-storage==21.1.0
+azure-mgmt-resource==23.0.1
+azure-mgmt-monitor==6.0.2
+
+# GCP SDK
+google-auth==2.27.0
+google-api-python-client==2.118.0
+google-cloud-storage==2.14.0
+certifi>=2024.2.2
+truststore>=0.9.1

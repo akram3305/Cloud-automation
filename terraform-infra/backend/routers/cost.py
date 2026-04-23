@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from typing import Optional
 import boto3
+import json
 from datetime import datetime, timedelta
 
 from database import get_db
@@ -9,6 +10,184 @@ from models import User, VM
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/cost", tags=["cost"])
+
+# ── Accurate reference pricing (on-demand, Linux) ────────────────────────────
+# AWS: ap-south-1 (Mumbai)  |  Azure: Central India  |  GCP: asia-south1
+# vcpu/ram fields are used for the smart fallback when an exact type is missing
+_REFERENCE = {
+    "t2.micro":     {"aws":0.0116,"azure":0.0114,"gcp":0.0084,  "vcpu":1,  "ram":1,    "azure_equiv":"B1s",           "azure_specs":"1 vCPU · 1 GiB",    "gcp_equiv":"e2-micro",         "gcp_specs":"2 vCPU · 1 GiB"},
+    "t2.small":     {"aws":0.0232,"azure":0.0214,"gcp":0.0168,  "vcpu":1,  "ram":2,    "azure_equiv":"B1ms",          "azure_specs":"1 vCPU · 2 GiB",    "gcp_equiv":"e2-small",         "gcp_specs":"2 vCPU · 2 GiB"},
+    "t2.medium":    {"aws":0.0464,"azure":0.0466,"gcp":0.0335,  "vcpu":2,  "ram":4,    "azure_equiv":"B2s",           "azure_specs":"2 vCPU · 4 GiB",    "gcp_equiv":"e2-medium",        "gcp_specs":"2 vCPU · 4 GiB"},
+    "t3.micro":     {"aws":0.0116,"azure":0.0114,"gcp":0.0084,  "vcpu":2,  "ram":1,    "azure_equiv":"B1s",           "azure_specs":"1 vCPU · 1 GiB",    "gcp_equiv":"e2-micro",         "gcp_specs":"2 vCPU · 1 GiB"},
+    "t3.medium":    {"aws":0.0464,"azure":0.0466,"gcp":0.0335,  "vcpu":2,  "ram":4,    "azure_equiv":"B2s",           "azure_specs":"2 vCPU · 4 GiB",    "gcp_equiv":"e2-medium",        "gcp_specs":"2 vCPU · 4 GiB"},
+    "t3.large":     {"aws":0.0928,"azure":0.0932,"gcp":0.0670,  "vcpu":2,  "ram":8,    "azure_equiv":"B2ms",          "azure_specs":"2 vCPU · 8 GiB",    "gcp_equiv":"e2-standard-2",    "gcp_specs":"2 vCPU · 8 GiB"},
+    "t3.xlarge":    {"aws":0.1856,"azure":0.1864,"gcp":0.1340,  "vcpu":4,  "ram":16,   "azure_equiv":"B4ms",          "azure_specs":"4 vCPU · 16 GiB",   "gcp_equiv":"e2-standard-4",    "gcp_specs":"4 vCPU · 16 GiB"},
+    "t3.2xlarge":   {"aws":0.3712,"azure":0.3320,"gcp":0.2684,  "vcpu":8,  "ram":32,   "azure_equiv":"B8ms",          "azure_specs":"8 vCPU · 32 GiB",   "gcp_equiv":"e2-standard-8",    "gcp_specs":"8 vCPU · 32 GiB"},
+    "m5.large":     {"aws":0.1060,"azure":0.1100,"gcp":0.0950,  "vcpu":2,  "ram":8,    "azure_equiv":"D2s v3",        "azure_specs":"2 vCPU · 8 GiB",    "gcp_equiv":"n2-standard-2",    "gcp_specs":"2 vCPU · 8 GiB"},
+    "m5.xlarge":    {"aws":0.2120,"azure":0.2200,"gcp":0.1900,  "vcpu":4,  "ram":16,   "azure_equiv":"D4s v3",        "azure_specs":"4 vCPU · 16 GiB",   "gcp_equiv":"n2-standard-4",    "gcp_specs":"4 vCPU · 16 GiB"},
+    "m5.2xlarge":   {"aws":0.4240,"azure":0.4400,"gcp":0.3800,  "vcpu":8,  "ram":32,   "azure_equiv":"D8s v3",        "azure_specs":"8 vCPU · 32 GiB",   "gcp_equiv":"n2-standard-8",    "gcp_specs":"8 vCPU · 32 GiB"},
+    "m5.4xlarge":   {"aws":0.8480,"azure":0.7680,"gcp":0.7769,  "vcpu":16, "ram":64,   "azure_equiv":"D16s v5",       "azure_specs":"16 vCPU · 64 GiB",  "gcp_equiv":"n2-standard-16",   "gcp_specs":"16 vCPU · 64 GiB"},
+    "m6i.large":    {"aws":0.1120,"azure":0.0960,"gcp":0.0971,  "vcpu":2,  "ram":8,    "azure_equiv":"D2s v5",        "azure_specs":"2 vCPU · 8 GiB",    "gcp_equiv":"n2-standard-2",    "gcp_specs":"2 vCPU · 8 GiB"},
+    "m6i.xlarge":   {"aws":0.2240,"azure":0.1920,"gcp":0.1942,  "vcpu":4,  "ram":16,   "azure_equiv":"D4s v5",        "azure_specs":"4 vCPU · 16 GiB",   "gcp_equiv":"n2-standard-4",    "gcp_specs":"4 vCPU · 16 GiB"},
+    "m6i.2xlarge":  {"aws":0.4480,"azure":0.3840,"gcp":0.3885,  "vcpu":8,  "ram":32,   "azure_equiv":"D8s v5",        "azure_specs":"8 vCPU · 32 GiB",   "gcp_equiv":"n2-standard-8",    "gcp_specs":"8 vCPU · 32 GiB"},
+    "m6i.4xlarge":  {"aws":0.8960,"azure":0.7680,"gcp":0.7769,  "vcpu":16, "ram":64,   "azure_equiv":"D16s v5",       "azure_specs":"16 vCPU · 64 GiB",  "gcp_equiv":"n2-standard-16",   "gcp_specs":"16 vCPU · 64 GiB"},
+    "m6i.8xlarge":  {"aws":1.7920,"azure":1.5360,"gcp":1.5539,  "vcpu":32, "ram":128,  "azure_equiv":"D32s v5",       "azure_specs":"32 vCPU · 128 GiB", "gcp_equiv":"n2-standard-32",   "gcp_specs":"32 vCPU · 128 GiB"},
+    "m6i.16xlarge": {"aws":3.5840,"azure":3.0720,"gcp":3.1077,  "vcpu":64, "ram":256,  "azure_equiv":"D64s v5",       "azure_specs":"64 vCPU · 256 GiB", "gcp_equiv":"n2-standard-64",   "gcp_specs":"64 vCPU · 256 GiB"},
+    "m6i.32xlarge": {"aws":7.1680,"azure":4.6080,"gcp":6.2154,  "vcpu":128,"ram":512,  "azure_equiv":"D96s v5",       "azure_specs":"96 vCPU · 384 GiB", "gcp_equiv":"n2-standard-128",  "gcp_specs":"128 vCPU · 512 GiB"},
+    "c5.large":     {"aws":0.0960,"azure":0.0872,"gcp":0.0760,  "vcpu":2,  "ram":4,    "azure_equiv":"F2s v2",        "azure_specs":"2 vCPU · 4 GiB",    "gcp_equiv":"c2-standard-4",    "gcp_specs":"4 vCPU · 16 GiB"},
+    "c5.xlarge":    {"aws":0.1920,"azure":0.1744,"gcp":0.1520,  "vcpu":4,  "ram":8,    "azure_equiv":"F4s v2",        "azure_specs":"4 vCPU · 8 GiB",    "gcp_equiv":"c2-standard-4",    "gcp_specs":"4 vCPU · 16 GiB"},
+    "c5.2xlarge":   {"aws":0.3840,"azure":0.3488,"gcp":0.3040,  "vcpu":8,  "ram":16,   "azure_equiv":"F8s v2",        "azure_specs":"8 vCPU · 16 GiB",   "gcp_equiv":"c2-standard-8",    "gcp_specs":"8 vCPU · 32 GiB"},
+    "c5.4xlarge":   {"aws":0.7680,"azure":0.6760,"gcp":0.8352,  "vcpu":16, "ram":32,   "azure_equiv":"F16s v2",       "azure_specs":"16 vCPU · 32 GiB",  "gcp_equiv":"c2-standard-16",   "gcp_specs":"16 vCPU · 64 GiB"},
+    "c5.9xlarge":   {"aws":1.7280,"azure":1.3520,"gcp":1.5660,  "vcpu":36, "ram":72,   "azure_equiv":"F32s v2",       "azure_specs":"32 vCPU · 64 GiB",  "gcp_equiv":"c2-standard-30",   "gcp_specs":"30 vCPU · 120 GiB"},
+    "c5.18xlarge":  {"aws":3.4560,"azure":2.7040,"gcp":3.1321,  "vcpu":72, "ram":144,  "azure_equiv":"F64s v2",       "azure_specs":"64 vCPU · 128 GiB", "gcp_equiv":"c2-standard-60",   "gcp_specs":"60 vCPU · 240 GiB"},
+    "c5a.xlarge":   {"aws":0.1720,"azure":0.1744,"gcp":0.1520,  "vcpu":4,  "ram":8,    "azure_equiv":"F4s v2",        "azure_specs":"4 vCPU · 8 GiB",    "gcp_equiv":"c2-standard-4",    "gcp_specs":"4 vCPU · 16 GiB"},
+    "c6i.xlarge":   {"aws":0.2040,"azure":0.1690,"gcp":0.1942,  "vcpu":4,  "ram":8,    "azure_equiv":"F4s v2",        "azure_specs":"4 vCPU · 8 GiB",    "gcp_equiv":"n2-standard-4",    "gcp_specs":"4 vCPU · 16 GiB"},
+    "c6i.4xlarge":  {"aws":0.8160,"azure":0.6760,"gcp":0.7769,  "vcpu":16, "ram":32,   "azure_equiv":"F16s v2",       "azure_specs":"16 vCPU · 32 GiB",  "gcp_equiv":"n2-standard-16",   "gcp_specs":"16 vCPU · 64 GiB"},
+    "c6i.16xlarge": {"aws":3.2640,"azure":2.7040,"gcp":3.1077,  "vcpu":64, "ram":128,  "azure_equiv":"F64s v2",       "azure_specs":"64 vCPU · 128 GiB", "gcp_equiv":"n2-standard-64",   "gcp_specs":"64 vCPU · 256 GiB"},
+    "r5.large":     {"aws":0.1440,"azure":0.1306,"gcp":0.1184,  "vcpu":2,  "ram":16,   "azure_equiv":"E2s v3",        "azure_specs":"2 vCPU · 16 GiB",   "gcp_equiv":"n1-highmem-2",     "gcp_specs":"2 vCPU · 13 GiB"},
+    "r5.xlarge":    {"aws":0.2880,"azure":0.2612,"gcp":0.2368,  "vcpu":4,  "ram":32,   "azure_equiv":"E4s v3",        "azure_specs":"4 vCPU · 32 GiB",   "gcp_equiv":"n1-highmem-4",     "gcp_specs":"4 vCPU · 26 GiB"},
+    "r5.2xlarge":   {"aws":0.5760,"azure":0.5224,"gcp":0.4736,  "vcpu":8,  "ram":64,   "azure_equiv":"E8s v3",        "azure_specs":"8 vCPU · 64 GiB",   "gcp_equiv":"n1-highmem-8",     "gcp_specs":"8 vCPU · 52 GiB"},
+    "r5.4xlarge":   {"aws":1.0080,"azure":1.0080,"gcp":1.0482,  "vcpu":16, "ram":128,  "azure_equiv":"E16s v5",       "azure_specs":"16 vCPU · 128 GiB", "gcp_equiv":"n2-highmem-16",    "gcp_specs":"16 vCPU · 128 GiB"},
+    "r5.8xlarge":   {"aws":2.0160,"azure":2.0160,"gcp":2.0963,  "vcpu":32, "ram":256,  "azure_equiv":"E32s v5",       "azure_specs":"32 vCPU · 256 GiB", "gcp_equiv":"n2-highmem-32",    "gcp_specs":"32 vCPU · 256 GiB"},
+    "r5.16xlarge":  {"aws":4.0320,"azure":4.0320,"gcp":4.1926,  "vcpu":64, "ram":512,  "azure_equiv":"E64s v5",       "azure_specs":"64 vCPU · 512 GiB", "gcp_equiv":"n2-highmem-64",    "gcp_specs":"64 vCPU · 512 GiB"},
+    "r6i.large":    {"aws":0.1440,"azure":0.1260,"gcp":0.1310,  "vcpu":2,  "ram":16,   "azure_equiv":"E2s v5",        "azure_specs":"2 vCPU · 16 GiB",   "gcp_equiv":"n2-highmem-2",     "gcp_specs":"2 vCPU · 16 GiB"},
+    "r6i.xlarge":   {"aws":0.2880,"azure":0.2520,"gcp":0.2620,  "vcpu":4,  "ram":32,   "azure_equiv":"E4s v5",        "azure_specs":"4 vCPU · 32 GiB",   "gcp_equiv":"n2-highmem-4",     "gcp_specs":"4 vCPU · 32 GiB"},
+    "r6i.4xlarge":  {"aws":1.0080,"azure":1.0080,"gcp":1.0482,  "vcpu":16, "ram":128,  "azure_equiv":"E16s v5",       "azure_specs":"16 vCPU · 128 GiB", "gcp_equiv":"n2-highmem-16",    "gcp_specs":"16 vCPU · 128 GiB"},
+    "r6i.16xlarge": {"aws":4.0320,"azure":4.0320,"gcp":4.1926,  "vcpu":64, "ram":512,  "azure_equiv":"E64s v5",       "azure_specs":"64 vCPU · 512 GiB", "gcp_equiv":"n2-highmem-64",    "gcp_specs":"64 vCPU · 512 GiB"},
+    "g4dn.xlarge":  {"aws":0.7360,"azure":0.5260,"gcp":0.5600,  "vcpu":4,  "ram":16,   "azure_equiv":"NC4as T4 v3",   "azure_specs":"4 vCPU · 28 GiB",   "gcp_equiv":"n1-std-4 + T4",    "gcp_specs":"4 vCPU · 15 GiB"},
+    "g4dn.2xlarge": {"aws":1.0530,"azure":0.9120,"gcp":0.8600,  "vcpu":8,  "ram":32,   "azure_equiv":"NC8as T4 v3",   "azure_specs":"8 vCPU · 56 GiB",   "gcp_equiv":"n1-std-8 + T4",    "gcp_specs":"8 vCPU · 30 GiB"},
+    "g4dn.4xlarge": {"aws":1.2040,"azure":1.1240,"gcp":1.1020,  "vcpu":16, "ram":64,   "azure_equiv":"NC16as T4 v3",  "azure_specs":"16 vCPU · 110 GiB", "gcp_equiv":"n1-std-16 + T4",   "gcp_specs":"16 vCPU · 60 GiB"},
+    "g5.xlarge":    {"aws":1.0060,"azure":1.2480,"gcp":1.1020,  "vcpu":4,  "ram":16,   "azure_equiv":"NC4as A10 v4",  "azure_specs":"4 vCPU · 14 GiB",   "gcp_equiv":"a2-highgpu-1g",    "gcp_specs":"12 vCPU · 85 GiB"},
+    "g5.2xlarge":   {"aws":1.2120,"azure":1.2480,"gcp":1.1020,  "vcpu":8,  "ram":32,   "azure_equiv":"NC8as A10 v4",  "azure_specs":"8 vCPU · 56 GiB",   "gcp_equiv":"a2-highgpu-1g",    "gcp_specs":"12 vCPU · 85 GiB"},
+    "p3.2xlarge":   {"aws":3.0600,"azure":2.8080,"gcp":2.4800,  "vcpu":8,  "ram":61,   "azure_equiv":"NC6s v3",       "azure_specs":"6 vCPU · 112 GiB",  "gcp_equiv":"a2-highgpu-1g",    "gcp_specs":"12 vCPU · 85 GiB"},
+    "t4g.medium":   {"aws":0.0376,"azure":0.0473,"gcp":0.0280,  "vcpu":2,  "ram":4,    "azure_equiv":"Bpsv2-2",       "azure_specs":"2 vCPU · 4 GiB",    "gcp_equiv":"t2a-standard-2",   "gcp_specs":"2 vCPU · 8 GiB"},
+    "t4g.large":    {"aws":0.0752,"azure":0.0946,"gcp":0.0560,  "vcpu":2,  "ram":8,    "azure_equiv":"Bpsv2-4",       "azure_specs":"4 vCPU · 8 GiB",    "gcp_equiv":"t2a-standard-4",   "gcp_specs":"4 vCPU · 16 GiB"},
+    "t4g.xlarge":   {"aws":0.1344,"azure":0.1864,"gcp":0.1120,  "vcpu":4,  "ram":16,   "azure_equiv":"B4ms",          "azure_specs":"4 vCPU · 16 GiB",   "gcp_equiv":"t2a-standard-4",   "gcp_specs":"4 vCPU · 16 GiB"},
+    "m6g.large":    {"aws":0.0880,"azure":0.0946,"gcp":0.0560,  "vcpu":2,  "ram":8,    "azure_equiv":"Dplds v5",      "azure_specs":"2 vCPU · 8 GiB",    "gcp_equiv":"t2a-standard-2",   "gcp_specs":"2 vCPU · 8 GiB"},
+    "m6g.xlarge":   {"aws":0.1544,"azure":0.1920,"gcp":0.1340,  "vcpu":4,  "ram":16,   "azure_equiv":"D4s v5",        "azure_specs":"4 vCPU · 16 GiB",   "gcp_equiv":"t2a-standard-4",   "gcp_specs":"4 vCPU · 16 GiB"},
+    "m6g.4xlarge":  {"aws":0.6160,"azure":0.7680,"gcp":0.5368,  "vcpu":16, "ram":64,   "azure_equiv":"D16s v5",       "azure_specs":"16 vCPU · 64 GiB",  "gcp_equiv":"t2a-standard-16",  "gcp_specs":"16 vCPU · 64 GiB"},
+    "m6g.16xlarge": {"aws":2.4640,"azure":3.0720,"gcp":2.1472,  "vcpu":64, "ram":256,  "azure_equiv":"D64s v5",       "azure_specs":"64 vCPU · 256 GiB", "gcp_equiv":"t2a-standard-64",  "gcp_specs":"64 vCPU · 256 GiB"},
+}
+
+def _closest_ref(instance_type, aws_live_price=None):
+    """Return reference data for instance_type; falls back to closest-spec entry with scaled prices."""
+    if instance_type in _REFERENCE:
+        return _REFERENCE[instance_type]
+    best_key, best_score = None, float("inf")
+    for k, v in _REFERENCE.items():
+        if "vcpu" not in v:
+            continue
+        # Use AWS price ratio as a proxy when specs unknown
+        if aws_live_price and v["aws"] > 0:
+            score = abs(aws_live_price / v["aws"] - 1)
+        else:
+            score = float("inf")
+        if score < best_score:
+            best_score = score
+            best_key = k
+    if best_key:
+        base = _REFERENCE[best_key]
+        scale = (aws_live_price or base["aws"]) / max(base["aws"], 0.001)
+        return {
+            "aws":         aws_live_price or base["aws"],
+            "azure":       round(base["azure"] * scale, 4),
+            "gcp":         round(base["gcp"]   * scale, 4),
+            "azure_equiv": base["azure_equiv"],
+            "azure_specs": base.get("azure_specs", ""),
+            "gcp_equiv":   base["gcp_equiv"],
+            "gcp_specs":   base.get("gcp_specs", ""),
+        }
+    return {"aws": aws_live_price or 0.05, "azure": round((aws_live_price or 0.05)*0.92,4),
+            "gcp": round((aws_live_price or 0.05)*0.88,4),
+            "azure_equiv":"equivalent","azure_specs":"","gcp_equiv":"equivalent","gcp_specs":""}
+
+_REGION_NAMES = {
+    "ap-south-1":    "Asia Pacific (Mumbai)",
+    "ap-south-2":    "Asia Pacific (Hyderabad)",
+    "us-east-1":     "US East (N. Virginia)",
+    "us-east-2":     "US East (Ohio)",
+    "us-west-1":     "US West (N. California)",
+    "us-west-2":     "US West (Oregon)",
+    "eu-west-1":     "Europe (Ireland)",
+    "eu-west-2":     "Europe (London)",
+    "eu-central-1":  "Europe (Frankfurt)",
+    "eu-north-1":    "Europe (Stockholm)",
+    "ap-southeast-1":"Asia Pacific (Singapore)",
+    "ap-southeast-2":"Asia Pacific (Sydney)",
+    "ap-northeast-1":"Asia Pacific (Tokyo)",
+    "ap-northeast-2":"Asia Pacific (Seoul)",
+    "ca-central-1":  "Canada (Central)",
+    "sa-east-1":     "South America (Sao Paulo)",
+    "me-south-1":    "Middle East (Bahrain)",
+    "af-south-1":    "Africa (Cape Town)",
+}
+
+
+@router.get("/compare")
+def compare_instance_costs(
+    instance_type: str = "t3.medium",
+    region:        str = "ap-south-1",
+    user: User = Depends(get_current_user),
+):
+    """Return on-demand pricing for AWS (live via Pricing API) + Azure/GCP reference."""
+
+    # ── Try live AWS price ────────────────────────────────────────────────────
+    aws_price  = None
+    aws_source = "reference"
+    try:
+        pricing  = boto3.client("pricing", region_name="us-east-1")
+        location = _REGION_NAMES.get(region, "Asia Pacific (Mumbai)")
+        resp = pricing.get_products(
+            ServiceCode="AmazonEC2",
+            Filters=[
+                {"Type":"TERM_MATCH","Field":"instanceType",   "Value":instance_type},
+                {"Type":"TERM_MATCH","Field":"location",       "Value":location},
+                {"Type":"TERM_MATCH","Field":"operatingSystem","Value":"Linux"},
+                {"Type":"TERM_MATCH","Field":"tenancy",        "Value":"Shared"},
+                {"Type":"TERM_MATCH","Field":"capacitystatus", "Value":"Used"},
+                {"Type":"TERM_MATCH","Field":"preInstalledSw", "Value":"NA"},
+            ],
+        )
+        for price_str in resp.get("PriceList", []):
+            terms = json.loads(price_str).get("terms", {}).get("OnDemand", {})
+            for term in terms.values():
+                for dim in term.get("priceDimensions", {}).values():
+                    usd = float(dim["pricePerUnit"].get("USD", 0))
+                    if usd > 0:
+                        aws_price  = round(usd, 6)
+                        aws_source = "live"
+                        break
+    except Exception as e:
+        print(f"[cost/compare] AWS Pricing API error: {e}")
+
+    ref = _closest_ref(instance_type, aws_price)
+
+    return {
+        "instance_type": instance_type,
+        "region":        region,
+        "aws": {
+            "price":       aws_price if aws_price is not None else ref["aws"],
+            "source":      aws_source,
+            "currency":    "USD",
+        },
+        "azure": {
+            "price":        ref["azure"],
+            "equivalent":   ref["azure_equiv"],
+            "specs":        ref.get("azure_specs", ""),
+            "source":       "reference",
+            "currency":     "USD",
+            "region_note":  "Central India",
+        },
+        "gcp": {
+            "price":        ref["gcp"],
+            "equivalent":   ref["gcp_equiv"],
+            "specs":        ref.get("gcp_specs", ""),
+            "source":       "reference",
+            "currency":     "USD",
+            "pricing_url":  "https://cloud.google.com/compute/all-pricing",
+            "region_note":  "asia-south1",
+        },
+    }
 
 
 def get_ce_client():

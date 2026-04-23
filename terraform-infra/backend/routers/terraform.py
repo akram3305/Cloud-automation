@@ -31,7 +31,9 @@ def preview_tf(
     try:
         from services.terraform_service import get_archived_files
         env   = json.loads(req.payload or "{}").get("tags", {}).get("environment", "dev")
-        files = get_archived_files(request_id, env)
+        rt    = (req.resource_type or "").lower()
+        cloud = "gcp" if rt.startswith("gcp_") else "azure" if rt.startswith("azure_") else "aws"
+        files = get_archived_files(request_id, env, cloud=cloud)
         if files.get("main.tf"):
             return {
                 "request_id": request_id,
@@ -98,7 +100,9 @@ def get_logs(
     try:
         from services.terraform_service import get_archived_files
         env   = json.loads(req.payload or "{}").get("tags", {}).get("environment", "dev")
-        files = get_archived_files(request_id, env)
+        rt    = (req.resource_type or "").lower()
+        cloud = "gcp" if rt.startswith("gcp_") else "azure" if rt.startswith("azure_") else "aws"
+        files = get_archived_files(request_id, env, cloud=cloud)
         return {
             "request_id": request_id,
             "log":        files.get("apply.log", "No logs available"),

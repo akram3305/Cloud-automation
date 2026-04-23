@@ -264,18 +264,31 @@ def list_env_logs(env: str, user: User = Depends(get_current_user)):
         paginator = s3.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=config.TF_STATE_BUCKET, Prefix=prefix):
             for obj in page.get("Contents", []):
-                # e.g. logs/prod/req_42/apply.log  →  parts = ["req_42", "apply.log"]
+                # New structure:  {cloud}/req_{id}/{file}   e.g. aws/req_42/apply.log
+                # Legacy structure: req_{id}/{file}          e.g. req_42/apply.log
                 parts = obj["Key"][len(prefix):].split("/")
-                if len(parts) == 2 and parts[0] and parts[1]:
-                    req_id, filename = parts
+                if len(parts) == 3 and parts[1] and parts[2]:
+                    # New cloud-prefixed structure
+                    cloud, req_id, filename = parts
                     if not re.match(r"^req_\d+$", req_id):
                         continue
-                    ts = obj["LastModified"].isoformat()
-                    if req_id not in req_map:
-                        req_map[req_id] = {"req_id": req_id, "files": [], "timestamp": ts}
-                    req_map[req_id]["files"].append(filename)
-                    if ts > req_map[req_id]["timestamp"]:
-                        req_map[req_id]["timestamp"] = ts
+                elif len(parts) == 2 and parts[0] and parts[1]:
+                    # Legacy structure — no cloud prefix, default to aws
+                    req_id, filename = parts
+                    cloud = "aws"
+                    if not re.match(r"^req_\d+$", req_id):
+                        continue
+                else:
+                    continue
+
+                ts  = obj["LastModified"].isoformat()
+                key = f"{cloud}/{req_id}"
+                if key not in req_map:
+                    req_map[key] = {"req_id": req_id, "cloud": cloud, "files": [], "timestamp": ts}
+                req_map[key]["files"].append(filename)
+                if ts > req_map[key]["timestamp"]:
+                    req_map[key]["timestamp"] = ts
+
         result = list(req_map.values())
         result.sort(
             key=lambda x: int(x["req_id"].replace("req_", "")) if x["req_id"].replace("req_", "").isdigit() else 0,
@@ -287,21 +300,42 @@ def list_env_logs(env: str, user: User = Depends(get_current_user)):
         return []
 
 
-@router.get("/state/{env}/logs/{req_id}/{filename}")
-def get_log_file(env: str, req_id: str, filename: str, user: User = Depends(get_current_user)):
-    """Retrieve the text content of a specific log file."""
+@router.get("/cloud/{cloud}/index")
+def get_cloud_index_endpoint(cloud: str, user: User = Depends(get_current_user)):
+    """Return the deployment manifest (index.json) for a given cloud."""
+    if cloud not in {"aws", "azure", "gcp"}:
+        raise HTTPException(status_code=400, detail="Invalid cloud")
+    from services.terraform_service import get_cloud_index
+    return get_cloud_index(cloud)
+
+
+@router.get("/cloud/{cloud}/{env}/log")
+def get_cloud_log_endpoint(cloud: str, env: str, user: User = Depends(get_current_user)):
+    """Return the combined deploy.log content for a cloud+env."""
+    if cloud not in {"aws", "azure", "gcp"}:
+        raise HTTPException(status_code=400, detail="Invalid cloud")
     if env not in _VALID_ENVS:
         raise HTTPException(status_code=400, detail="Invalid environment")
+    from services.terraform_service import get_cloud_log
+    return {"content": get_cloud_log(cloud, env)}
+
+
+@router.get("/state/{env}/logs/{cloud}/{req_id}/{filename}")
+def get_log_file(env: str, cloud: str, req_id: str, filename: str, user: User = Depends(get_current_user)):
+    """Retrieve the text content of a specific log file."""
+    _VALID_CLOUDS = {"aws", "azure", "gcp"}
+    if env not in _VALID_ENVS:
+        raise HTTPException(status_code=400, detail="Invalid environment")
+    if cloud not in _VALID_CLOUDS:
+        raise HTTPException(status_code=400, detail="Invalid cloud")
     if not re.match(r"^req_\d+$", req_id):
         raise HTTPException(status_code=400, detail="Invalid request ID")
     if filename not in _VALID_FILES:
         raise HTTPException(status_code=400, detail="Invalid filename")
     try:
         s3  = _s3_client()
-        key = f"aionos/logs/{env}/{req_id}/{filename}"
+        key = f"aionos/logs/{env}/{cloud}/{req_id}/{filename}"
         obj = s3.get_object(Bucket=config.TF_STATE_BUCKET, Key=key)
         return {"content": obj["Body"].read().decode("utf-8")}
-    except s3.exceptions.NoSuchKey:
-        raise HTTPException(status_code=404, detail="File not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

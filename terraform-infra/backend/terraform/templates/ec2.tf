@@ -1,13 +1,13 @@
 # ============================================================
-# EC2 Static Template
-# Values injected via terraform.tfvars — do not hardcode here
+# EC2 — self-contained template (no external module)
+# Values injected via terraform.tfvars
 # ============================================================
 
 terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 6.0"
+      version = "~> 5.0"
     }
   }
 
@@ -95,45 +95,52 @@ variable "tags" {
   default = {}
 }
 
-# ── Module ───────────────────────────────────────────────────
+# ── EC2 Instance ─────────────────────────────────────────────
 
-module "ec2" {
-  source      = "../../../../modules/compute/ec2"
-  environment = var.environment
+resource "aws_instance" "this" {
+  ami                         = var.ami
+  instance_type               = var.instance_type
+  subnet_id                   = var.subnet_id != "" ? var.subnet_id : null
+  key_name                    = var.key_name != "" ? var.key_name : null
+  vpc_security_group_ids      = length(var.security_group_ids) > 0 ? var.security_group_ids : null
+  associate_public_ip_address = var.associate_public_ip
+  monitoring                  = var.monitoring
+  disable_api_termination     = var.disable_api_termination
 
-  instances = {
-    (var.resource_name) = {
-      ami                               = var.ami
-      instance_type                     = var.instance_type
-      subnet_id                         = var.subnet_id
-      vpc_security_group_ids            = var.security_group_ids
-      key_name                          = var.key_name
-      associate_public_ip_address       = var.associate_public_ip
-      monitoring                        = var.monitoring
-      disable_api_termination           = var.disable_api_termination
-      root_volume_type                  = var.root_volume_type
-      root_volume_size                  = var.root_volume_size
-      root_volume_delete_on_termination = var.root_volume_delete_on_termination
-      root_volume_encrypted             = var.root_volume_encrypted
-      metadata_http_endpoint            = "enabled"
-      metadata_http_tokens              = "optional"
-      metadata_http_hop_limit           = 1
-      metadata_instance_tags            = "enabled"
-      tags                              = var.tags
-    }
+  root_block_device {
+    volume_type           = var.root_volume_type
+    volume_size           = var.root_volume_size
+    delete_on_termination = var.root_volume_delete_on_termination
+    encrypted             = var.root_volume_encrypted
+  }
+
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "optional"
+    http_put_response_hop_limit = 1
+    instance_metadata_tags      = "enabled"
+  }
+
+  tags = merge(var.tags, {
+    Name        = var.resource_name
+    Environment = var.environment
+  })
+
+  lifecycle {
+    ignore_changes = [ami]
   }
 }
 
 # ── Outputs ──────────────────────────────────────────────────
 
 output "instance_id" {
-  value = try(values(module.ec2.instance_ids)[0], "")
+  value = aws_instance.this.id
 }
 
 output "public_ip" {
-  value = try(values(module.ec2.public_ips)[0], "")
+  value = aws_instance.this.public_ip
 }
 
 output "private_ip" {
-  value = try(values(module.ec2.private_ips)[0], "")
+  value = aws_instance.this.private_ip
 }

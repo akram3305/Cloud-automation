@@ -42,7 +42,7 @@ const STAGES = [
   {
     key:   "apply",
     label: "TF Apply",
-    sub:   "Provisioning AWS",
+    sub:   "Provisioning…",
     icon:  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
     color: "#00d4aa",
   },
@@ -56,8 +56,18 @@ const STAGES = [
 ]
 
 const RESOURCE_ICONS = {
-  eks:      "⚙️", ec2: "🖥️", s3: "🪣", vpc: "🔒",
+  eks: "⚙️", ec2: "🖥️", s3: "🪣", vpc: "🔒",
   iam_role: "🔑", keypair: "🗝️", rds: "🗄️",
+  gcp_instance: "🖥️", gcp_network: "🌐", gcp_storage: "🪣",
+  azure_vm: "🖥️",
+}
+
+function cloudLabel(resourceType) {
+  if (!resourceType) return "Cloud"
+  const r = resourceType.toLowerCase()
+  if (r.startsWith("gcp_") || r.startsWith("gke_")) return "GCP"
+  if (r.startsWith("azure_") || r.startsWith("aks_")) return "Azure"
+  return "AWS"
 }
 
 /* ─── helpers ─────────────────────────────────────────────────────────── */
@@ -322,7 +332,7 @@ export default function Pipeline() {
 
         {/* sub */}
         <div style={{ textAlign: "center", fontSize: "10px", color: "#334155", lineHeight: 1.3 }}>
-          {stage.sub}
+          {stage.key === "apply" ? `Provisioning ${cloudLabel(data?.resource_type)}` : stage.sub}
         </div>
 
         {/* duration badge */}
@@ -557,7 +567,9 @@ export default function Pipeline() {
                     <span style={{ color: STAGES.find(s => s.key === activeSt)?.color, fontWeight: "600" }}>
                       {STAGES.find(s => s.key === activeSt)?.label}
                     </span>
-                    {" — "}{STAGES.find(s => s.key === activeSt)?.sub}
+                    {" — "}{activeSt === "apply"
+                      ? `Provisioning ${cloudLabel(data?.resource_type)}`
+                      : STAGES.find(s => s.key === activeSt)?.sub}
                   </span>
                   <div style={{ marginLeft: "auto", fontSize: "11px", color: "#334155" }}>
                     {!isFinalDone && !isFinalFail && "Live · polling 900ms"}

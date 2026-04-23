@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { useTheme } from "../context/ThemeContext"
-import { listRequests, listVMs, listBuckets, deleteBucket, startVM, stopVM, listVPCs, listLambdas, listLoadBalancers } from "../api/api"
+import { listRequests, listVMs, listBuckets, startVM, stopVM, listVPCs, listLambdas, listLoadBalancers } from "../api/api"
 import CreateVMModal from "../components/CreateVMModal"
 
 const ACCESS_CODE = "AIONOS"
@@ -97,12 +97,6 @@ export default function Resources() {
     finally { setActionId(null) }
   }
 
-  async function handleDeleteBucket(name) {
-    if (!window.confirm("Delete bucket " + name + "?")) return
-    try { await deleteBucket(name, true); setSuccess("Deleted "+name); fetchAll(); setTimeout(()=>setSuccess(""),3000) }
-    catch(e) { alert(e.response?.data?.detail||e.message) }
-  }
-
   async function handleS3Create() {
     if (!s3Form.name.trim()) { setS3Err("Name required"); return }
     setS3C(true); setS3Err("")
@@ -131,7 +125,7 @@ export default function Resources() {
     if (type==="s3") return s3.map(b=>({
       id:b.name, label:b.name, status:"active", region:b.region,
       detail:new Date(b.created).toLocaleDateString("en-IN"),
-      actions:<button onClick={()=>handleDeleteBucket(b.name)} style={{padding:"3px 10px",borderRadius:"6px",fontSize:"11px",cursor:"pointer",border:"1px solid #f43f5e40",background:"#f43f5e15",color:"#f43f5e"}}>Delete</button>
+      actions:null
     }))
     if (type==="vpc") return vpcs.map(v=>({ id:v.id, label:v.name||v.id, status:"available", region:v.region, detail:v.cidr, actions:null }))
     if (type==="lambda") return lambdas.map(l=>({ id:l.name, label:l.name, status:"active", region:l.region, detail:l.runtime+" - "+l.size_kb+" KB", actions:null }))

@@ -7,10 +7,12 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
 import boto3
+from botocore.exceptions import ClientError
 import json
 
 from database import get_db
 from models import User, Request
+from models.aws_ssh_key import AwsSshKey
 from routers.auth import get_current_user, require_operator, require_admin
 
 router = APIRouter(prefix="/iam", tags=["iam"])
@@ -148,93 +150,51 @@ def create_role(
     }
 
 
-# ─── CREATE KEYPAIR via Terraform ─────────────────────────────
+# ─── CREATE KEYPAIR via boto3 (direct, no approval required) ──
 @router.post("/keypairs/create")
 def create_keypair(
-    background_tasks: BackgroundTasks,
-    db:               Session = Depends(get_db),
-    user:             User    = Depends(require_operator),
-    # Accept BOTH query params (frontend) and body
-    name:   str = "",
-    region: str = "ap-south-1",
+    user:   User    = Depends(require_operator),
+    name:   str     = "",
+    region: str     = "ap-south-1",
     body:   CreateKeypairRequest = None,
+    db:     Session = Depends(get_db),
 ):
-    # Merge query params and body - query params take priority (frontend sends them)
+    """Create key pair directly via boto3 — returns private key for download.
+    Stores the private key in DB so users can re-download without regenerating.
+    """
     if body:
-        if not name: name = body.name
+        if not name:   name   = body.name
         if region == "ap-south-1" and body.region: region = body.region
     if not name:
-        from fastapi import HTTPException
         raise HTTPException(400, "name is required")
-    """Create key pair via Terraform — auto-downloads .pem file"""
-    tags = (body.tags if body else {}) or {}
-    tags.setdefault("environment", "dev")
-    tags.setdefault("project",     "AIonOS-Platform")
-    tags.setdefault("owner",       user.username)
 
-    payload = json.dumps({
-        "name":   name,
-        "region": region,
-        "tags":   tags,
-    })
+    try:
+        ec2    = boto3.client("ec2", region_name=region)
+        result = ec2.create_key_pair(KeyName=name, KeyType="rsa", KeyFormat="pem")
+        private_key = result["KeyMaterial"]
+        filename    = f"{name}.pem"
 
-    req = Request(
-        username      = user.username,
-        resource_name = name,
-        resource_type = "keypair",
-        status        = "pending",
-        payload       = payload,
-    )
-    db.add(req)
-    db.commit()
-    db.refresh(req)
+        # Upsert into DB so key can be re-downloaded later
+        row = db.query(AwsSshKey).filter(AwsSshKey.key_name == name).first()
+        if row:
+            row.private_key = private_key
+            row.region      = region
+            row.filename    = filename
+        else:
+            db.add(AwsSshKey(key_name=name, region=region, private_key=private_key, filename=filename))
+        db.commit()
 
-    # Auto-generate and apply (keypairs don't need approval)
-    def do_keypair():
-        from database import SessionLocal
-        from services.terraform_service import generate_keypair_tf, run_terraform, get_outputs
-        db2  = SessionLocal()
-        req2 = db2.query(Request).filter(Request.id == req.id).first()
-        try:
-            config = json.loads(payload)
-            config["resource_name"] = name
-            config["username"]      = user.username
-            environment = config.get("tags", {}).get("environment", "dev").lower()
-
-            generate_keypair_tf(req.id, config)
-            init = run_terraform(req.id, "init", environment)
-            if not init["success"]:
-                req2.status = "failed"
-                db2.commit()
-                return
-
-            run_terraform(req.id, "plan", environment)
-            apply = run_terraform(req.id, "apply", environment)
-
-            if apply["success"]:
-                outputs          = get_outputs(req.id, environment)
-                req2.status      = "completed"
-                req2.instance_id = outputs.get("key_name", body.name)
-                req2.approved_by = "auto"
-            else:
-                req2.status = "failed"
-                req2.reject_reason = apply["error"][:300]
-
-            db2.commit()
-        except Exception as e:
-            req2.status = "failed"
-            db2.commit()
-            print(f"Keypair error: {e}")
-        finally:
-            db2.close()
-
-    background_tasks.add_task(do_keypair)
-    return {
-        "message":    "Key pair creation started",
-        "request_id": req.id,
-        "key_name":   name,
-        "note":       f"Private key will be saved to Downloads/{body.name}.pem"
-    }
+        return {
+            "key_name":    name,
+            "private_key": private_key,
+            "key_pair_id": result.get("KeyPairId", ""),
+            "region":      region,
+            "filename":    filename,
+        }
+    except ClientError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Failed to create key pair: {e}")
 
 
 # --- DELETE IAM ROLE ---
@@ -265,60 +225,20 @@ def delete_keypair(key_name: str, region: str = "ap-south-1", user: User = Depen
         raise HTTPException(500, str(e))
 
 
-# --- DOWNLOAD KEYPAIR (get private key content) ---
+# --- DOWNLOAD KEYPAIR (get stored private key content) ---
 @router.get("/keypairs/{key_name}/download")
-def download_keypair(key_name: str, user: User = Depends(get_current_user)):
-    """Return private key file content for download"""
-    import os
-    # Check common save locations
-    possible_paths = [
-        f"C:/Users/Akram.Khan/Downloads/{key_name}.pem",
-        f"D:/AWS_Terraform_automation/terraform-infra/terraform_workspaces/{key_name}.pem",
-        f"D:/AWS_Terraform_automation/terraform-infra/keys/{key_name}.pem",
-    ]
-    
-    from database import SessionLocal
-    from models.request import Request
-    db = SessionLocal()
-    req = db.query(Request).filter(
-        Request.resource_name == key_name,
-        Request.resource_type == "keypair"
-    ).order_by(Request.id.desc()).first()
-    db.close()
-    
-    if req and req.status == "completed":
-        return {
-            "key_name": key_name,
-            "status": "completed",
-            "message": f"Key saved to Downloads/{key_name}.pem",
-            "request_id": req.id
-        }
-    elif req:
-        return {
-            "key_name": key_name, 
-            "status": req.status,
-            "message": "Key pair creation in progress"
-        }
-    
-    return {"key_name": key_name, "status": "not_found"}
-
-
-# --- KEYPAIR STATUS ---
-@router.get("/keypairs/{key_name}/status")  
-def keypair_status(key_name: str, user: User = Depends(get_current_user)):
-    from database import SessionLocal
-    from models.request import Request
-    db = SessionLocal()
-    req = db.query(Request).filter(
-        Request.resource_name == key_name,
-        Request.resource_type == "keypair"
-    ).order_by(Request.id.desc()).first()
-    db.close()
-    if not req:
-        return {"status": "not_found"}
+def download_keypair(
+    key_name: str,
+    user: User    = Depends(get_current_user),
+    db:   Session = Depends(get_db),
+):
+    """Return stored private key for re-download — no new key is generated."""
+    row = db.query(AwsSshKey).filter(AwsSshKey.key_name == key_name).first()
+    if not row:
+        raise HTTPException(404, f"No stored key for '{key_name}'. Re-create the key pair to save it.")
     return {
-        "status": req.status,
-        "key_name": key_name,
-        "request_id": req.id,
-        "reject_reason": req.reject_reason
+        "key_name":    row.key_name,
+        "private_key": row.private_key,
+        "filename":    row.filename,
+        "region":      row.region,
     }

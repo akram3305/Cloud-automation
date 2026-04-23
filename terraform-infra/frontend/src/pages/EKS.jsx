@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react"
 import { useTheme } from "../context/ThemeContext"
 import api from "../api/api"
 import { setupEKSRoles } from "../api/api"
+import ResourceGuide from "../components/HowToGuide"
 
 const K8S_VERSIONS    = ["1.35","1.34","1.33","1.32"]
 const REGIONS         = ["ap-south-1","us-east-1","us-east-2","eu-west-1","ap-southeast-1"]
@@ -183,10 +184,13 @@ export default function EKS() {
             Managed Kubernetes via Terraform approval pipeline
           </p>
         </div>
-        <button onClick={openModal}
-          style={{ padding:"10px 20px", borderRadius:"10px", fontSize:"13px", fontWeight:"600", cursor:"pointer", border:"none", background:"#00d4aa", color:"#0a0f1e" }}>
-          + Request Cluster
-        </button>
+        <div style={{ display:"flex", gap:"8px", alignItems:"center" }}>
+          <ResourceGuide cloud="aws" resource="eks" dark={dark} />
+          <button onClick={openModal}
+            style={{ padding:"10px 20px", borderRadius:"10px", fontSize:"13px", fontWeight:"600", cursor:"pointer", border:"none", background:"#00d4aa", color:"#0a0f1e" }}>
+            + Request Cluster
+          </button>
+        </div>
       </div>
 
       {success && <div style={{ background:"#00d4aa15", border:"1px solid #00d4aa30", color:"#00d4aa", padding:"12px 16px", borderRadius:"10px", marginBottom:"16px", fontSize:"13px" }}>{success}</div>}

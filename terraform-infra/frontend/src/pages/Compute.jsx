@@ -1,9 +1,12 @@
 import { useEffect, useState, useCallback, useRef } from "react"
+import { useLocation } from "react-router-dom"
 import { listVMs, startVM, stopVM, deleteVM } from "../api/api"
 import CreateVMModal from "../components/CreateVMModal"
 import EC2ConnectionInfo from "../components/EC2ConnectionInfo"
 import { useTheme } from "../context/ThemeContext"
 import ScheduleModal from "../components/ScheduleModal"
+import ResourceGuide, { ScheduleGuide } from "../components/HowToGuide"
+import ResourceBudgetModal from "../components/ResourceBudgetModal"
 
 const STATE = {
   running:  { bg:"#dcfce7", color:"#15803d", dot:"#16a34a", darkBg:"#14532d20", darkColor:"#4ade80" },
@@ -38,12 +41,14 @@ function EnvBadge({ env }) {
 }
 
 export default function Compute() {
-  const { dark } = useTheme()
+  const { dark }   = useTheme()
+  const { state: routeState } = useLocation()
   const [vms,       setVms]       = useState([])
   const [loading,   setLoading]   = useState(true)
-  const [showModal, setShowModal] = useState(false)
+  const [showModal, setShowModal] = useState(!!routeState?.openCreate)
   const [schedVM,   setSchedVM]   = useState(null)
   const [connVM,    setConnVM]    = useState(null)
+  const [budgetVM,  setBudgetVM]  = useState(null)
   const [success,   setSuccess]   = useState("")
   const [actionId,  setActionId]  = useState(null)
   const [envFilter, setEnvFilter] = useState("all")
@@ -167,12 +172,16 @@ export default function Compute() {
             </span>
           </div>
         </div>
-        {!isViewer && (
-          <button onClick={() => setShowModal(true)} style={{ display:"flex", alignItems:"center", gap:"8px", background:"#00d4aa", color:"#0a0f1e", border:"none", padding:"10px 18px", borderRadius:"10px", fontSize:"13px", fontWeight:"600", cursor:"pointer" }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Create VM
-          </button>
-        )}
+        <div style={{ display:"flex", gap:"8px", alignItems:"center" }}>
+          <ResourceGuide cloud="aws" resource="ec2" dark={dark} />
+          <ScheduleGuide cloud="aws" dark={dark} />
+          {!isViewer && (
+            <button onClick={() => setShowModal(true)} style={{ display:"flex", alignItems:"center", gap:"8px", background:"#00d4aa", color:"#0a0f1e", border:"none", padding:"10px 18px", borderRadius:"10px", fontSize:"13px", fontWeight:"600", cursor:"pointer" }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Create VM
+            </button>
+          )}
+        </div>
       </div>
 
       {success && (
@@ -260,6 +269,11 @@ export default function Compute() {
                           {(vm.auto_start||vm.auto_stop)?"Scheduled":"Schedule"}
                         </button>
                       )}
+                      {!isViewer && (
+                        <button onClick={()=>setBudgetVM(vm)} style={{ padding:"5px 12px", borderRadius:"6px", fontSize:"12px", cursor:"pointer", border:"1px solid #f59e0b40", background:"#f59e0b15", color:"#f59e0b" }}>
+                          Budget
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -271,7 +285,13 @@ export default function Compute() {
 
       {connVM && <EC2ConnectionInfo vm={connVM} onClose={()=>setConnVM(null)} />}
       {schedVM && <ScheduleModal vm={schedVM} onClose={()=>setSchedVM(null)} onSaved={()=>{setSchedVM(null);fetchVMs()}} />}
-      {showModal && <CreateVMModal onClose={()=>setShowModal(false)} onSuccess={()=>{ setShowModal(false); setSuccess("Request submitted - awaiting admin approval"); fetchVMs(); setTimeout(()=>setSuccess(""),4000) }} />}
+      {showModal && <CreateVMModal prefill={routeState?.prefill} onClose={()=>setShowModal(false)} onSuccess={()=>{ setShowModal(false); setSuccess("Request submitted - awaiting admin approval"); fetchVMs(); setTimeout(()=>setSuccess(""),4000) }} />}
+      {budgetVM && (
+        <ResourceBudgetModal
+          resource={{ vm_id: budgetVM.instance_id, vm_name: budgetVM.name, cloud: "aws", region: budgetVM.region, instance_type: budgetVM.instance_type }}
+          onClose={() => setBudgetVM(null)}
+        />
+      )}
     </div>
   )
 }

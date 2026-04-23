@@ -1,15 +1,20 @@
 import { useState } from "react"
 import { useTheme } from "../context/ThemeContext"
-import { getEnvTFState, getEnvLogs, getLogFile } from "../api/api"
+import { getCloudIndex, getCloudLog } from "../api/api"
 
-const ENVS = ["dev", "staging", "prod"]
-const ENV_COLORS = { dev: "#3b82f6", staging: "#f59e0b", prod: "#00d4aa" }
+const CLOUDS = ["aws", "azure", "gcp"]
+const CLOUD_COLORS  = { aws: "#f59e0b", azure: "#0078D4", gcp: "#4285f4" }
+const CLOUD_LABELS  = { aws: "Amazon Web Services", azure: "Microsoft Azure", gcp: "Google Cloud Platform" }
+const CLOUD_ICONS   = { aws: "☁️", azure: "🔷", gcp: "🌐" }
+const ENVS          = ["dev", "staging", "prod"]
+const ENV_COLORS    = { dev: "#3b82f6", staging: "#f59e0b", prod: "#00d4aa" }
 
-function formatSize(bytes) {
-  if (!bytes && bytes !== 0) return "-"
-  if (bytes < 1024)        return bytes + " B"
-  if (bytes < 1048576)     return (bytes / 1024).toFixed(1) + " KB"
-  return (bytes / 1048576).toFixed(1) + " MB"
+const STATUS_COLORS = {
+  completed:   "#00d4aa",
+  failed:      "#f43f5e",
+  provisioning:"#a78bfa",
+  planning:    "#3b82f6",
+  pending:     "#f59e0b",
 }
 
 function formatDate(iso) {
@@ -20,83 +25,68 @@ function formatDate(iso) {
   })
 }
 
-const FILE_ICONS = { "main.tf": "🔧", "terraform.tfvars": "⚙️", "apply.log": "📝" }
-
 export default function TFState() {
   const { dark } = useTheme()
 
   const bg      = dark ? "#070c18" : "#f0f4f8"
   const surface = dark ? "#0f172a" : "#ffffff"
   const border  = dark ? "#1e293b" : "#e2e8f0"
-  const text    = dark ? "#f1f5f9" : "#0f172a"
-  const muted   = dark ? "#475569" : "#64748b"
-  const subtle  = dark ? "#1e293b" : "#f1f5f9"
-  const codeBg  = dark ? "#020817" : "#f8fafc"
+  const text     = dark ? "#f1f5f9" : "#0f172a"
+  const muted    = dark ? "#475569" : "#64748b"
+  const subtle   = dark ? "#1e293b" : "#f1f5f9"
+  const codeBg   = dark ? "#020817" : "#f8fafc"
 
-  const [selectedEnv,  setSelectedEnv]  = useState(null)
-  const [activeTab,    setActiveTab]    = useState("tfstate")
-  const [tfstateFiles, setTfstateFiles] = useState([])
-  const [logFolders,   setLogFolders]   = useState([])
-  const [expandedReq,  setExpandedReq]  = useState(null)
-  const [fileContent,  setFileContent]  = useState(null)   // { name, content }
-  const [loadingState, setLoadingState] = useState(false)
-  const [loadingLogs,  setLoadingLogs]  = useState(false)
-  const [loadingFile,  setLoadingFile]  = useState(false)
+  const [selectedCloud,  setSelectedCloud]  = useState(null)
+  const [activeTab,      setActiveTab]      = useState("deployments")
+  const [deployments,    setDeployments]    = useState([])
+  const [totalDeploys,   setTotalDeploys]   = useState(0)
+  const [logEnv,         setLogEnv]         = useState("dev")
+  const [logContent,     setLogContent]     = useState("")
+  const [loadingIndex,   setLoadingIndex]   = useState(false)
+  const [loadingLog,     setLoadingLog]     = useState(false)
 
-  // ── loaders ──────────────────────────────────────────────────────
-  async function loadTFState(env) {
-    setLoadingState(true)
-    setTfstateFiles([])
-    try { const r = await getEnvTFState(env); setTfstateFiles(r.data) }
-    catch { setTfstateFiles([]) }
-    setLoadingState(false)
+  const accent = selectedCloud ? CLOUD_COLORS[selectedCloud] : "#00d4aa"
+
+  async function selectCloud(cloud) {
+    if (selectedCloud === cloud) { setSelectedCloud(null); return }
+    setSelectedCloud(cloud)
+    setActiveTab("deployments")
+    setLogContent("")
+    setLoadingIndex(true)
+    setDeployments([])
+    try {
+      const r = await getCloudIndex(cloud)
+      setDeployments(r.data.deployments || [])
+      setTotalDeploys(r.data.total || 0)
+    } catch {
+      setDeployments([])
+    }
+    setLoadingIndex(false)
   }
 
-  async function loadLogs(env) {
-    setLoadingLogs(true)
-    setLogFolders([])
-    try { const r = await getEnvLogs(env); setLogFolders(r.data) }
-    catch { setLogFolders([]) }
-    setLoadingLogs(false)
-  }
-
-  // ── handlers ─────────────────────────────────────────────────────
-  function selectEnv(env) {
-    if (selectedEnv === env) { setSelectedEnv(null); return }
-    setSelectedEnv(env)
-    setActiveTab("tfstate")
-    setExpandedReq(null)
-    setFileContent(null)
-    loadTFState(env)
+  async function loadLog(cloud, env) {
+    setLoadingLog(true)
+    setLogContent("")
+    try {
+      const r = await getCloudLog(cloud, env)
+      setLogContent(r.data.content || "(no logs yet)")
+    } catch {
+      setLogContent("Could not load logs.")
+    }
+    setLoadingLog(false)
   }
 
   function switchTab(tab) {
     setActiveTab(tab)
-    setExpandedReq(null)
-    setFileContent(null)
-    if (tab === "tfstate") loadTFState(selectedEnv)
-    else loadLogs(selectedEnv)
-  }
-
-  function toggleReq(reqId) {
-    if (expandedReq === reqId) { setExpandedReq(null); setFileContent(null) }
-    else { setExpandedReq(reqId); setFileContent(null) }
-  }
-
-  async function viewFile(reqId, filename) {
-    setLoadingFile(true)
-    setFileContent(null)
-    try {
-      const r = await getLogFile(selectedEnv, reqId, filename)
-      setFileContent({ name: filename, content: r.data.content })
-    } catch {
-      setFileContent({ name: filename, content: "Could not load file." })
+    if (tab === "log" && selectedCloud) {
+      loadLog(selectedCloud, logEnv)
     }
-    setLoadingFile(false)
   }
 
-  // ── render ───────────────────────────────────────────────────────
-  const accent = selectedEnv ? ENV_COLORS[selectedEnv] : "#00d4aa"
+  function changeLogEnv(env) {
+    setLogEnv(env)
+    if (selectedCloud) loadLog(selectedCloud, env)
+  }
 
   return (
     <div style={{ padding: "28px", background: bg, minHeight: "100vh", transition: "all 0.3s ease" }}>
@@ -106,17 +96,17 @@ export default function TFState() {
       <div style={{ marginBottom: "28px", animation: "fadeUp 0.4s ease both" }}>
         <h1 style={{ fontSize: "22px", fontWeight: "700", color: text, margin: 0 }}>Terraform State &amp; Logs</h1>
         <p style={{ fontSize: "13px", color: muted, marginTop: "4px" }}>
-          Browse tfstate files and deployment logs stored in S3 per environment
+          Browse deployment history and logs stored per cloud in S3
         </p>
       </div>
 
-      {/* Environment cards */}
+      {/* Cloud cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "14px", marginBottom: "24px" }}>
-        {ENVS.map((env, i) => {
-          const color  = ENV_COLORS[env]
-          const active = selectedEnv === env
+        {CLOUDS.map((cloud, i) => {
+          const color  = CLOUD_COLORS[cloud]
+          const active = selectedCloud === cloud
           return (
-            <button key={env} onClick={() => selectEnv(env)} style={{
+            <button key={cloud} onClick={() => selectCloud(cloud)} style={{
               padding: "20px 22px", borderRadius: "14px",
               border: `2px solid ${active ? color : border}`,
               background: active ? `${color}18` : surface,
@@ -125,17 +115,17 @@ export default function TFState() {
               transition: "all 0.2s ease",
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                <div style={{ fontSize: "26px" }}>{active ? "📂" : "📁"}</div>
-                <div>
+                <div style={{ fontSize: "26px" }}>{CLOUD_ICONS[cloud]}</div>
+                <div style={{ flex: 1 }}>
                   <div style={{ fontSize: "15px", fontWeight: "700", color: active ? color : text, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                    {env}
+                    {cloud}
                   </div>
                   <div style={{ fontSize: "11px", color: muted, marginTop: "3px" }}>
-                    {active ? "Exploring..." : "Click to explore"}
+                    {active ? CLOUD_LABELS[cloud] : "Click to explore"}
                   </div>
                 </div>
                 {active && (
-                  <div style={{ marginLeft: "auto", width: "8px", height: "8px", borderRadius: "50%", background: color }} />
+                  <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: color }} />
                 )}
               </div>
             </button>
@@ -144,23 +134,31 @@ export default function TFState() {
       </div>
 
       {/* Detail panel */}
-      {selectedEnv && (
+      {selectedCloud && (
         <div style={{ background: surface, border: `1px solid ${border}`, borderRadius: "14px", overflow: "hidden", animation: "fadeUp 0.3s ease both" }}>
 
-          {/* Panel breadcrumb */}
-          <div style={{ padding: "14px 20px", borderBottom: `1px solid ${border}`, display: "flex", alignItems: "center", gap: "6px" }}>
-            <span style={{ fontSize: "15px" }}>📂</span>
-            <span style={{ fontSize: "14px", fontWeight: "600", color: text }}>{selectedEnv}</span>
+          {/* Breadcrumb */}
+          <div style={{ padding: "14px 20px", borderBottom: `1px solid ${border}`, display: "flex", alignItems: "center", gap: "8px" }}>
+            <span style={{ fontSize: "15px" }}>{CLOUD_ICONS[selectedCloud]}</span>
+            <span style={{ fontSize: "14px", fontWeight: "600", color: text, textTransform: "uppercase" }}>{selectedCloud}</span>
             <span style={{ fontSize: "13px", color: muted }}>/ infrastructure</span>
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px" }}>
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "8px" }}>
+              {!loadingIndex && (
+                <span style={{ fontSize: "11px", background: `${accent}18`, color: accent, border: `1px solid ${accent}40`, borderRadius: "20px", padding: "2px 10px", fontWeight: "600" }}>
+                  {totalDeploys} deployment{totalDeploys !== 1 ? "s" : ""}
+                </span>
+              )}
               <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: accent }} />
-              <span style={{ fontSize: "11px", color: accent, fontWeight: "500", textTransform: "uppercase" }}>{selectedEnv}</span>
+              <span style={{ fontSize: "11px", color: accent, fontWeight: "500", textTransform: "uppercase" }}>{selectedCloud}</span>
             </div>
           </div>
 
           {/* Tabs */}
           <div style={{ display: "flex", borderBottom: `1px solid ${border}` }}>
-            {[{ key: "tfstate", label: "TF State", icon: "🗂️" }, { key: "logs", label: "Deployment Logs", icon: "📋" }].map(tab => (
+            {[
+              { key: "deployments", label: "Deployments", icon: "🗂️" },
+              { key: "log",         label: "Deploy Log",  icon: "📋" },
+            ].map(tab => (
               <button key={tab.key} onClick={() => switchTab(tab.key)} style={{
                 padding: "13px 24px", border: "none", background: "transparent", cursor: "pointer",
                 borderBottom: `2px solid ${activeTab === tab.key ? accent : "transparent"}`,
@@ -177,116 +175,107 @@ export default function TFState() {
           {/* Tab content */}
           <div style={{ padding: "20px" }}>
 
-            {/* ── TF State tab ─────────────────────────────────── */}
-            {activeTab === "tfstate" && (
-              loadingState
-                ? <EmptyMsg muted={muted}>Loading state files from S3...</EmptyMsg>
-                : tfstateFiles.length === 0
-                  ? <EmptyMsg muted={muted}>No .tfstate files found in <b>s3://aionos-terraform-state-3305/{selectedEnv}/</b></EmptyMsg>
+            {/* ── Deployments tab ── */}
+            {activeTab === "deployments" && (
+              loadingIndex
+                ? <EmptyMsg muted={muted}>Loading deployment manifest from S3…</EmptyMsg>
+                : deployments.length === 0
+                  ? <EmptyMsg muted={muted}>
+                      No deployments found in <b>s3://aionos-terraform-state-3305/aionos/{selectedCloud}/index.json</b>
+                    </EmptyMsg>
                   : (
                     <table style={{ width: "100%", borderCollapse: "collapse" }}>
                       <thead>
                         <tr style={{ borderBottom: `1px solid ${border}` }}>
-                          {["State File Key", "Size", "Last Modified"].map(h => (
+                          {["Req #", "Resource", "Type", "Env", "Status", "Deployed At", "By"].map(h => (
                             <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: "10px", fontWeight: "700", color: muted, textTransform: "uppercase", letterSpacing: "0.07em" }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {tfstateFiles.map((f, i) => (
-                          <tr key={i} style={{ borderBottom: `1px solid ${subtle}`, transition: "background 0.1s" }}>
-                            <td style={{ padding: "13px 12px", fontSize: "12px", color: text, fontFamily: "monospace" }}>
-                              <span style={{ marginRight: "8px" }}>🗂️</span>{f.key}
-                            </td>
-                            <td style={{ padding: "13px 12px", fontSize: "12px", color: muted }}>{formatSize(f.size)}</td>
-                            <td style={{ padding: "13px 12px", fontSize: "12px", color: muted }}>{formatDate(f.last_modified)}</td>
-                          </tr>
-                        ))}
+                        {[...deployments].reverse().map((d, i) => {
+                          const statusColor = STATUS_COLORS[d.status] || "#64748b"
+                          const envColor    = ENV_COLORS[d.environment] || "#64748b"
+                          return (
+                            <tr key={i} style={{ borderBottom: `1px solid ${subtle}` }}>
+                              <td style={{ padding: "12px 12px", fontSize: "12px", color: accent, fontFamily: "monospace", fontWeight: "600" }}>
+                                #{d.req_id}
+                              </td>
+                              <td style={{ padding: "12px 12px", fontSize: "12px", color: text, fontWeight: "500" }}>
+                                {d.resource_name || "-"}
+                              </td>
+                              <td style={{ padding: "12px 12px" }}>
+                                <span style={{ fontSize: "10px", fontFamily: "monospace", background: subtle, color: muted, padding: "2px 7px", borderRadius: "6px" }}>
+                                  {d.resource_type || "-"}
+                                </span>
+                              </td>
+                              <td style={{ padding: "12px 12px" }}>
+                                <span style={{ fontSize: "10px", fontWeight: "700", textTransform: "uppercase", background: `${envColor}18`, color: envColor, border: `1px solid ${envColor}40`, padding: "2px 8px", borderRadius: "20px" }}>
+                                  {d.environment}
+                                </span>
+                              </td>
+                              <td style={{ padding: "12px 12px" }}>
+                                <span style={{ fontSize: "10px", fontWeight: "700", textTransform: "uppercase", background: `${statusColor}18`, color: statusColor, border: `1px solid ${statusColor}40`, padding: "2px 8px", borderRadius: "20px" }}>
+                                  {d.status}
+                                </span>
+                              </td>
+                              <td style={{ padding: "12px 12px", fontSize: "11px", color: muted }}>{formatDate(d.deployed_at)}</td>
+                              <td style={{ padding: "12px 12px", fontSize: "11px", color: muted }}>{d.username || "-"}</td>
+                            </tr>
+                          )
+                        })}
                       </tbody>
                     </table>
                   )
             )}
 
-            {/* ── Logs tab ─────────────────────────────────────── */}
-            {activeTab === "logs" && (
-              loadingLogs
-                ? <EmptyMsg muted={muted}>Loading deployment logs from S3...</EmptyMsg>
-                : logFolders.length === 0
-                  ? <EmptyMsg muted={muted}>No deployment logs found in <b>s3://aionos-terraform-state-3305/logs/{selectedEnv}/</b></EmptyMsg>
+            {/* ── Deploy Log tab ── */}
+            {activeTab === "log" && (
+              <div>
+                {/* Env selector */}
+                <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
+                  {ENVS.map(env => {
+                    const c = ENV_COLORS[env]
+                    const active = logEnv === env
+                    return (
+                      <button key={env} onClick={() => changeLogEnv(env)} style={{
+                        padding: "6px 18px", borderRadius: "20px", border: `1px solid ${active ? c : border}`,
+                        background: active ? `${c}18` : "transparent", cursor: "pointer",
+                        fontSize: "12px", fontWeight: active ? "700" : "400",
+                        color: active ? c : muted, transition: "all 0.15s ease",
+                        textTransform: "uppercase", letterSpacing: "0.05em",
+                      }}>
+                        {env}
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {loadingLog
+                  ? <EmptyMsg muted={muted}>Loading deploy log from S3…</EmptyMsg>
                   : (
-                    <div style={{ display: "grid", gridTemplateColumns: fileContent || loadingFile ? "1fr 1.4fr" : "1fr", gap: "16px" }}>
-
-                      {/* Left — req folder list */}
-                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                        {logFolders.map(req => (
-                          <div key={req.req_id} style={{
-                            border: `1px solid ${expandedReq === req.req_id ? accent : border}`,
-                            borderRadius: "10px", overflow: "hidden", transition: "border-color 0.15s",
-                          }}>
-                            {/* Folder row */}
-                            <button onClick={() => toggleReq(req.req_id)} style={{
-                              width: "100%", padding: "10px 14px", border: "none",
-                              background: expandedReq === req.req_id ? `${accent}12` : subtle,
-                              cursor: "pointer", display: "flex", alignItems: "center",
-                              justifyContent: "space-between", transition: "background 0.15s",
-                            }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: "9px" }}>
-                                <span style={{ fontSize: "15px" }}>{expandedReq === req.req_id ? "📂" : "📁"}</span>
-                                <span style={{ fontSize: "13px", fontWeight: "600", color: text }}>{req.req_id}</span>
-                                <span style={{ fontSize: "10px", color: muted, background: border, borderRadius: "20px", padding: "2px 8px" }}>
-                                  {req.files.length} file{req.files.length !== 1 ? "s" : ""}
-                                </span>
-                              </div>
-                              <span style={{ fontSize: "11px", color: muted }}>{formatDate(req.timestamp)}</span>
-                            </button>
-
-                            {/* File list */}
-                            {expandedReq === req.req_id && (
-                              <div style={{ padding: "8px 12px 10px", background: surface, display: "flex", flexDirection: "column", gap: "3px" }}>
-                                {req.files.map(file => (
-                                  <button key={file} onClick={() => viewFile(req.req_id, file)} style={{
-                                    display: "flex", alignItems: "center", gap: "8px",
-                                    padding: "7px 10px", border: "none", borderRadius: "8px",
-                                    background: fileContent?.name === file ? `${accent}18` : "transparent",
-                                    cursor: "pointer", textAlign: "left", transition: "background 0.1s",
-                                  }}>
-                                    <span style={{ fontSize: "13px" }}>{FILE_ICONS[file] || "📄"}</span>
-                                    <span style={{ fontSize: "12px", fontFamily: "monospace", color: fileContent?.name === file ? accent : text }}>
-                                      {file}
-                                    </span>
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        ))}
+                    <div style={{ background: codeBg, border: `1px solid ${border}`, borderRadius: "10px", overflow: "hidden" }}>
+                      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: "12px", fontWeight: "600", color: text, fontFamily: "monospace" }}>
+                          aionos/{selectedCloud}/{logEnv}/deploy.log
+                        </span>
+                        <span style={{ fontSize: "10px", color: muted, background: subtle, borderRadius: "6px", padding: "2px 8px" }}>
+                          {logContent ? logContent.split("\n").length + " lines" : ""}
+                        </span>
                       </div>
-
-                      {/* Right — file viewer */}
-                      {(fileContent || loadingFile) && (
-                        <div style={{ background: codeBg, border: `1px solid ${border}`, borderRadius: "10px", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-                          <div style={{ padding: "10px 14px", borderBottom: `1px solid ${border}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
-                            <span style={{ fontSize: "12px", fontWeight: "600", color: text, fontFamily: "monospace" }}>
-                              {loadingFile ? "Loading…" : fileContent?.name}
-                            </span>
-                            {fileContent && !loadingFile && (
-                              <button onClick={() => setFileContent(null)} style={{ background: "none", border: "none", cursor: "pointer", color: muted, fontSize: "16px", lineHeight: 1 }}>✕</button>
-                            )}
-                          </div>
-                          <pre style={{
-                            margin: 0, padding: "16px",
-                            fontSize: "11px", fontFamily: "'Courier New', monospace",
-                            color: dark ? "#e2e8f0" : "#0f172a",
-                            overflowX: "auto", overflowY: "auto",
-                            maxHeight: "480px", whiteSpace: "pre-wrap", wordBreak: "break-word",
-                            flex: 1,
-                          }}>
-                            {loadingFile ? "Loading file content…" : fileContent?.content}
-                          </pre>
-                        </div>
-                      )}
+                      <pre style={{
+                        margin: 0, padding: "16px",
+                        fontSize: "11px", fontFamily: "'Courier New', monospace",
+                        color: dark ? "#e2e8f0" : "#0f172a",
+                        overflowX: "auto", overflowY: "auto",
+                        maxHeight: "520px", whiteSpace: "pre-wrap", wordBreak: "break-word",
+                      }}>
+                        {logContent || "(no logs yet for this environment)"}
+                      </pre>
                     </div>
                   )
+                }
+              </div>
             )}
 
           </div>
