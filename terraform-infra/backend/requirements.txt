@@ -24,3 +24,6 @@ google-api-python-client==2.118.0
 google-cloud-storage==2.14.0
 certifi>=2024.2.2
 truststore>=0.9.1
+
+# SSH terminal (WebSSH)
+paramiko==3.4.0

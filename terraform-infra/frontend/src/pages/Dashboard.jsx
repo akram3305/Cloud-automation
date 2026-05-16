@@ -9,6 +9,7 @@ import {
 } from "../api/api"
 import { useTheme } from "../context/ThemeContext"
 import { useNavigate } from "react-router-dom"
+import PinnedResources from "../components/PinnedResources"
 
 const PIE_COLORS = ["#00d4aa", "#3b82f6", "#a78bfa", "#f59e0b", "#f43f5e", "#06b6d4"]
 
@@ -262,6 +263,9 @@ export default function Dashboard() {
             </div>
           ))}
         </div>
+
+        {/* ── Pinned Resources ── */}
+        <PinnedResources dark={dark} />
 
         {/* ── Quick Launch ── */}
         <div style={{ marginBottom:"24px", animation:"fadeUp 0.5s ease 0.24s both" }}>

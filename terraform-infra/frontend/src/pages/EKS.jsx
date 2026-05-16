@@ -3,6 +3,7 @@ import { useTheme } from "../context/ThemeContext"
 import api from "../api/api"
 import { setupEKSRoles } from "../api/api"
 import ResourceGuide from "../components/HowToGuide"
+import K8sPodManager from "../components/K8sPodManager"
 
 const K8S_VERSIONS    = ["1.35","1.34","1.33","1.32"]
 const REGIONS         = ["ap-south-1","us-east-1","us-east-2","eu-west-1","ap-southeast-1"]
@@ -41,6 +42,7 @@ export default function EKS() {
   const [prereqs,        setPrereqs]        = useState(null)
   const [settingUpRoles, setSettingUpRoles] = useState(false)
   const [setupResult,    setSetupResult]    = useState(null)
+  const [podCluster,     setPodCluster]     = useState(null)  // {name, region}
   const [form, setForm] = useState({
     name: "", region: "ap-south-1",
     kubernetes_version: "1.32",
@@ -286,9 +288,17 @@ export default function EKS() {
                           </div>
                         </div>
                       </div>
-                      {c.status === "CREATING" && (
-                        <div style={{ width:"8px", height:"8px", borderRadius:"50%", background:"#3b82f6", animation:"pulse 1.5s infinite", marginTop:"6px" }} />
-                      )}
+                      <div style={{ display:"flex", alignItems:"center", gap:"8px" }}>
+                        {c.status === "ACTIVE" && (
+                          <button onClick={() => setPodCluster({ name: c.name, region: c.region })}
+                            style={{ padding:"6px 14px", borderRadius:"8px", border:"1px solid #3b82f640", background:"#3b82f610", color:"#3b82f6", cursor:"pointer", fontSize:"12px", fontWeight:"600", display:"flex", alignItems:"center", gap:"5px" }}>
+                            ☸ Pods
+                          </button>
+                        )}
+                        {c.status === "CREATING" && (
+                          <div style={{ width:"8px", height:"8px", borderRadius:"50%", background:"#3b82f6", animation:"pulse 1.5s infinite" }} />
+                        )}
+                      </div>
                     </div>
 
                     {/* Node groups */}
@@ -348,6 +358,17 @@ export default function EKS() {
             </div>
           )}
         </div>
+      )}
+
+      {/* K8s Pod Manager */}
+      {podCluster && (
+        <K8sPodManager
+          cloud="eks"
+          clusterName={podCluster.name}
+          region={podCluster.region}
+          dark={dark}
+          onClose={() => setPodCluster(null)}
+        />
       )}
 
       {/* Create Modal */}

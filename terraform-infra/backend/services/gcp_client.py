@@ -9,6 +9,8 @@ import base64
 import json
 import os
 import re
+import time
+import threading
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,10 +23,60 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 os.environ["PYTHONHTTPSVERIFY"] = "0"
 
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "")
+GCP_ORG_ID     = os.getenv("GCP_ORG_ID", "")
 _GCP_CREDENTIALS_JSON = os.getenv("GCP_CREDENTIALS_JSON", "")
 _GCP_CREDENTIALS_FILE = os.getenv("GCP_CREDENTIALS_FILE", "")
 
 CONFIGURED = bool(GCP_PROJECT_ID and (_GCP_CREDENTIALS_JSON or _GCP_CREDENTIALS_FILE))
+
+# ── Simple TTL cache (thread-safe) ────────────────────────────────────────────
+_CACHE: dict = {}
+_CACHE_LOCK = threading.Lock()
+
+def _cache_get(key: str):
+    with _CACHE_LOCK:
+        entry = _CACHE.get(key)
+        if entry and time.monotonic() - entry[0] < entry[2]:
+            return True, entry[1]
+        return False, None
+
+def _cache_set(key: str, value, ttl: int = 300):
+    with _CACHE_LOCK:
+        _CACHE[key] = (time.monotonic(), value, ttl)
+
+def _cache_invalidate(prefix: str = ""):
+    with _CACHE_LOCK:
+        for k in [k for k in _CACHE if k.startswith(prefix)]:
+            del _CACHE[k]
+
+# ── Pricing (on-demand, asia-south1 / us-central1 average) ────────────────
+_PRICE_MAP: dict = {
+    "e2-micro":0.0084,"e2-small":0.0168,"e2-medium":0.0335,
+    "e2-standard-2":0.0670,"e2-standard-4":0.1340,"e2-standard-8":0.2684,"e2-standard-16":0.5368,
+    "e2-highmem-2":0.0900,"e2-highmem-4":0.1800,"e2-highmem-8":0.3600,
+    "n1-standard-1":0.0475,"n1-standard-2":0.0950,"n1-standard-4":0.1900,"n1-standard-8":0.3800,
+    "n1-standard-16":0.7600,"n1-standard-32":1.5200,
+    "n1-highmem-2":0.1184,"n1-highmem-4":0.2368,"n1-highmem-8":0.4736,
+    "n2-standard-2":0.0971,"n2-standard-4":0.1942,"n2-standard-8":0.3885,"n2-standard-16":0.7769,
+    "n2-highmem-2":0.1310,"n2-highmem-4":0.2620,"n2-highmem-8":0.5240,
+    "c2-standard-4":0.2088,"c2-standard-8":0.4176,"c2-standard-16":0.8352,"c2-standard-30":1.5660,
+    "c2-standard-60":3.1321,
+    "t2a-standard-1":0.0350,"t2a-standard-2":0.0700,"t2a-standard-4":0.1400,
+    "a2-highgpu-1g":2.9338,"a2-highgpu-2g":5.8675,"a2-highgpu-4g":11.7350,
+    "m1-ultramem-40":6.3039,"m1-ultramem-80":12.6078,
+}
+
+def _gcp_price(machine_type: str) -> float:
+    """Return the on-demand hourly price for a GCP machine type."""
+    if not machine_type:
+        return 0.05
+    t = machine_type.split("/")[-1].lower()
+    if t in _PRICE_MAP:
+        return _PRICE_MAP[t]
+    for k, v in _PRICE_MAP.items():
+        if t.startswith(k[:8]):
+            return v
+    return 0.05
 
 
 def _load_credentials_info() -> dict:
@@ -79,11 +131,11 @@ def _no_verify_http(creds):
     return google_auth_httplib2.AuthorizedHttp(creds, http=http)
 
 
-def get_compute_client():
+def get_compute_client(creds=None):
     """Return a googleapiclient.discovery resource for Compute Engine."""
     from googleapiclient import discovery
-    creds = _get_credentials()
-    return discovery.build("compute", "v1", http=_no_verify_http(creds), cache_discovery=False)
+    c = creds or _get_credentials()
+    return discovery.build("compute", "v1", http=_no_verify_http(c), cache_discovery=False)
 
 
 def get_storage_client():
@@ -100,14 +152,14 @@ def get_container_client():
     return discovery.build("container", "v1", http=_no_verify_http(creds), cache_discovery=False)
 
 
-def _compute_regions_client():
-    client = get_compute_client()
+def _compute_regions_client(creds=None):
+    client = get_compute_client(creds=creds)
     return client.networks(), client.subnetworks()
 
 
 # ── Instance helpers ───────────────────────────────────────────────────────
 
-def list_instances(project: str = "", zone: str = "-") -> list[dict]:
+def list_instances(project: str = "", zone: str = "-", creds=None) -> list[dict]:
     """
     List all Compute Engine instances.
 
@@ -115,7 +167,7 @@ def list_instances(project: str = "", zone: str = "-") -> list[dict]:
     Returns a flat list of serialized instance dicts.
     """
     project = project or GCP_PROJECT_ID
-    client = get_compute_client()
+    client = get_compute_client(creds=creds)
 
     results = []
     if zone == "-":
@@ -631,6 +683,178 @@ def create_instance(
 
     op = client.instances().insert(project=project, zone=zone, body=body).execute()
     return {"operation": op.get("name"), "status": op.get("status"), "zone": zone, "name": name}
+
+
+# ── Org-level helpers ─────────────────────────────────────────────────────
+
+def build_credentials_from_json(creds_json: str):
+    """Build service account credentials from a JSON string (for DB-stored creds)."""
+    from google.oauth2 import service_account
+    info = json.loads(creds_json)
+    return service_account.Credentials.from_service_account_info(
+        info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+
+
+def _rm_client(creds=None):
+    """Resource Manager v1 client."""
+    from googleapiclient import discovery
+    c = creds or _get_credentials()
+    return discovery.build("cloudresourcemanager", "v1", http=_no_verify_http(c), cache_discovery=False)
+
+
+def _rm_v3_client(creds=None):
+    """Resource Manager v3 client (supports org/folder hierarchy)."""
+    from googleapiclient import discovery
+    c = creds or _get_credentials()
+    return discovery.build("cloudresourcemanager", "v3", http=_no_verify_http(c), cache_discovery=False)
+
+
+def list_all_projects(org_id: str = "", creds=None) -> list:
+    """
+    List all GCP projects accessible to the service account.
+    If org_id is provided, filter to projects under that organization.
+    Returns list of dicts with projectId, name, lifecycleState, labels.
+    Results are cached for 5 minutes.
+    """
+    cache_key = f"projects:{org_id or 'all'}"
+    hit, cached = _cache_get(cache_key)
+    if hit:
+        return cached
+
+    try:
+        rm = _rm_client(creds)
+        results = []
+        req = rm.projects().list()
+        while req:
+            resp = req.execute()
+            for p in resp.get("projects", []):
+                results.append({
+                    "id":       p.get("projectId", ""),
+                    "name":     p.get("name", p.get("projectId", "")),
+                    "number":   str(p.get("projectNumber", "")),
+                    "status":   p.get("lifecycleState", "UNKNOWN"),
+                    "labels":   p.get("labels", {}),
+                    "parent":   p.get("parent", {}),
+                })
+            req = rm.projects().list_next(req, resp)
+
+        # Filter by org if provided
+        if org_id:
+            org_id_clean = org_id.replace("organizations/", "")
+            results = [
+                p for p in results
+                if p.get("parent", {}).get("id") == org_id_clean
+                or p.get("parent", {}).get("type") == "organization"
+                and p.get("parent", {}).get("id") == org_id_clean
+            ]
+        _cache_set(cache_key, results, ttl=600)
+        return results
+    except Exception:
+        return []
+
+
+def create_gcp_project(project_id: str, name: str = "", org_id: str = "", creds=None) -> dict:
+    """
+    Create a new GCP project via Resource Manager API.
+    Returns operation info; project takes ~30s to become active.
+    """
+    rm = _rm_client(creds)
+    body: dict = {
+        "projectId": project_id,
+        "name": name or project_id,
+    }
+    if org_id:
+        clean = org_id.replace("organizations/", "")
+        body["parent"] = {"type": "organization", "id": clean}
+
+    op = rm.projects().create(body=body).execute()
+    _cache_invalidate("projects:")  # bust the project list cache
+    return {
+        "operation": op.get("name", ""),
+        "project_id": project_id,
+        "name": name or project_id,
+        "status": "creating",
+    }
+
+
+def get_project_resource_summary(project_id: str, creds=None) -> dict:
+    """
+    Return a lightweight resource count for a project.
+    Counts: VMs, running VMs, storage buckets.
+    """
+    summary = {
+        "project_id":      project_id,
+        "instance_count":  0,
+        "running_count":   0,
+        "bucket_count":    0,
+        "network_count":   0,
+    }
+    try:
+        instances = list_instances(project=project_id, zone="-", creds=creds)
+        summary["instance_count"] = len(instances)
+        summary["running_count"]  = sum(1 for i in instances if i.get("status") == "RUNNING")
+    except Exception:
+        pass
+    try:
+        from google.cloud import storage as gcs
+        c = creds or _get_credentials()
+        sc = gcs.Client(project=project_id, credentials=c)
+        summary["bucket_count"] = len(list(sc.list_buckets()))
+    except Exception:
+        pass
+    try:
+        cc = get_compute_client(creds=creds)
+        nets = cc.networks().list(project=project_id).execute()
+        summary["network_count"] = len(nets.get("items", []))
+    except Exception:
+        pass
+    return summary
+
+
+def estimate_project_compute_cost(project_id: str, creds=None) -> dict:
+    """
+    Estimate current monthly compute cost for a project.
+    Returns: {total_monthly, hourly_rate, instances: [{name, zone, machine_type, status, monthly_cost}]}
+    Results are cached for 3 minutes per project.
+    """
+    cache_key = f"cost:{project_id}"
+    hit, cached = _cache_get(cache_key)
+    if hit:
+        return cached
+
+    try:
+        instances = list_instances(project=project_id, zone="-", creds=creds)
+    except Exception:
+        return {"total_monthly": 0.0, "hourly_rate": 0.0, "instances": []}
+
+    total_monthly = 0.0
+    total_hourly  = 0.0
+    detail = []
+
+    for inst in instances:
+        mt      = inst.get("machine_type", "")
+        is_run  = inst.get("status") == "RUNNING"
+        hourly  = _gcp_price(mt)
+        monthly = round(hourly * 730, 4) if is_run else 0.0
+        total_monthly += monthly
+        total_hourly  += hourly if is_run else 0.0
+        detail.append({
+            "name":         inst.get("name"),
+            "zone":         inst.get("zone"),
+            "machine_type": mt,
+            "status":       inst.get("status"),
+            "hourly_rate":  hourly,
+            "monthly_cost": monthly,
+        })
+
+    result = {
+        "total_monthly": round(total_monthly, 2),
+        "hourly_rate":   round(total_hourly, 4),
+        "instances":     detail,
+    }
+    _cache_set(cache_key, result, ttl=300)
+    return result
 
 
 # ── Health check ──────────────────────────────────────────────────────────

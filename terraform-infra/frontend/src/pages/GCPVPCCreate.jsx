@@ -2,6 +2,7 @@ import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useTheme } from "../context/ThemeContext"
 import { createRequest } from "../api/api"
+import GCPProjectSelector from "../components/GCPProjectSelector"
 
 const STEPS = ["Basics", "Subnets", "Firewall", "Review"]
 
@@ -63,6 +64,9 @@ export default function GCPVPCCreate() {
     padding:"9px 12px", fontSize:13, color:text, fontFamily:"inherit", outline:"none",
   }
 
+  const [selProject,  setSelProject]  = useState(() => {
+    try { return JSON.parse(localStorage.getItem("gcp_selected_project") || "null") } catch { return null }
+  })
   const [step,        setStep]        = useState(0)
   const [netName,     setNetName]     = useState("")
   const [description, setDescription] = useState("")
@@ -100,6 +104,7 @@ export default function GCPVPCCreate() {
         cloud_provider: "gcp",
         region: subnetMode === "custom" ? subnetRegion : "us-central1",
         payload: {
+          project_id:               selProject?.id || "",
           network_name:             name,
           description:              description.trim(),
           environment,
@@ -165,11 +170,14 @@ export default function GCPVPCCreate() {
         <span style={{ color:muted }}>/</span>
         <span style={{ fontSize:13, fontWeight:600, color:text }}>Create VPC Network</span>
 
-        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:8 }}>
-          <div style={{ width:32, height:32, borderRadius:9, background:"linear-gradient(135deg,#4285F4,#34A853)", display:"flex", alignItems:"center", justifyContent:"center" }}>
-            {GCP_ICON}
+        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:12 }}>
+          <GCPProjectSelector value={selProject} onChange={p => { setSelProject(p); if (p) localStorage.setItem("gcp_selected_project", JSON.stringify(p)); else localStorage.removeItem("gcp_selected_project") }} showLabel={false} compact={true} />
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <div style={{ width:32, height:32, borderRadius:9, background:"linear-gradient(135deg,#4285F4,#34A853)", display:"flex", alignItems:"center", justifyContent:"center" }}>
+              {GCP_ICON}
+            </div>
+            <span style={{ fontSize:13, fontWeight:600, color:text }}>Google Cloud</span>
           </div>
-          <span style={{ fontSize:13, fontWeight:600, color:text }}>Google Cloud</span>
         </div>
       </div>
 

@@ -31,6 +31,7 @@ import GCPStorage        from "./pages/GCPStorage"
 import GCPStorageCreate  from "./pages/GCPStorageCreate"
 import AzureServices    from "./pages/AzureServices"
 import GCPServices      from "./pages/GCPServices"
+import GCPProjects      from "./pages/GCPProjects"
 import ServiceCatalog    from "./pages/ServiceCatalog"
 import EC2Launch         from "./pages/EC2Launch"
 import AzureVMLaunch     from "./pages/AzureVMLaunch"
@@ -38,6 +39,9 @@ import GCPComputeLaunch  from "./pages/GCPComputeLaunch"
 import GCPKubernetes     from "./pages/GCPKubernetes"
 import GCPGKECreate        from "./pages/GCPGKECreate"
 import ResourceMonitoring  from "./pages/ResourceMonitoring"
+import Settings            from "./pages/Settings"
+import OrgProjects         from "./pages/OrgProjects"
+import Blueprints          from "./pages/Blueprints"
 import Sidebar             from "./components/Sidebar"
 
 function PrivateLayout({ children }) {
@@ -63,6 +67,9 @@ export default function App() {
         {/* ── Platform ── */}
         <Route path="/overview"         element={<PrivateLayout><MultiCloudDashboard /></PrivateLayout>} />
         <Route path="/monitoring"       element={<PrivateLayout><ResourceMonitoring /></PrivateLayout>} />
+        <Route path="/settings"         element={<PrivateLayout><Settings /></PrivateLayout>} />
+        <Route path="/org-projects"     element={<PrivateLayout><OrgProjects /></PrivateLayout>} />
+        <Route path="/blueprints"       element={<PrivateLayout><Blueprints /></PrivateLayout>} />
 
         {/* ── AWS ── */}
         <Route path="/"                 element={<PrivateLayout><Dashboard /></PrivateLayout>} />
@@ -99,6 +106,8 @@ export default function App() {
         <Route path="/gcp/kubernetes"        element={<PrivateLayout><GCPKubernetes /></PrivateLayout>} />
         <Route path="/gcp/kubernetes/create" element={<PrivateLayout><GCPGKECreate /></PrivateLayout>} />
         <Route path="/gcp/services"          element={<PrivateLayout><GCPServices /></PrivateLayout>} />
+        <Route path="/gcp/projects"          element={<PrivateLayout><GCPProjects /></PrivateLayout>} />
+        <Route path="/gcp/billing"           element={<Navigate to="/gcp/projects?tab=billing" replace />} />
 
         {/* ── Service Catalog & Launch Wizards ── */}
         <Route path="/services"              element={<PrivateLayout><ServiceCatalog /></PrivateLayout>} />

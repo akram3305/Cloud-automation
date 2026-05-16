@@ -4,8 +4,11 @@ import { useTheme } from "../context/ThemeContext"
 import {
   listAzureVMs, startAzureVM, stopAzureVM, restartAzureVM, deleteAzureVM,
   getAzureVMConnectInfo, getAzureVMSchedule, setAzureVMSchedule,
+  recordUserAction,
 } from "../api/api"
 import ResourceBudgetModal from "../components/ResourceBudgetModal"
+import SSHTerminalModal from "../components/SSHTerminalModal"
+import { usePinnedResources } from "../components/PinnedResources"
 
 const SUBS = ["nonprod", "prod"]
 const STATUS_COLOR = {
@@ -308,6 +311,8 @@ export default function AzureCompute() {
   const [connectVM,  setConnectVM]  = useState(null)   // { vm, rg }
   const [scheduleVM, setScheduleVM] = useState(null)   // { vm, rg }
   const [budgetVM,   setBudgetVM]   = useState(null)   // { vm, rg }
+  const [termVM,     setTermVM]     = useState(null)   // { vm, rg, sub }
+  const { isPinned, toggle: togglePin } = usePinnedResources()
 
   const fetchVMs = () => {
     setLoading(true); setError("")
@@ -322,8 +327,15 @@ export default function AzureCompute() {
   const action = async (fn, rg, name, label) => {
     const key = `${rg}/${name}`
     setActioning(a => ({ ...a, [key]: label }))
-    try { await fn(rg, name, subscription); fetchVMs() }
-    catch (e) { setError(e.response?.data?.detail || `Failed to ${label}`) }
+    try {
+      await fn(rg, name, subscription)
+      recordUserAction({ cloud: "azure", action: `VM ${label}`, resource_type: "VM", resource: name, detail: `${rg} · ${subscription}`, status: "success" }).catch(() => {})
+      fetchVMs()
+    }
+    catch (e) {
+      recordUserAction({ cloud: "azure", action: `VM ${label}`, resource_type: "VM", resource: name, detail: `${rg} · ${subscription}`, status: "failed" }).catch(() => {})
+      setError(e.response?.data?.detail || `Failed to ${label}`)
+    }
     finally { setActioning(a => { const n = {...a}; delete n[key]; return n }) }
   }
 
@@ -450,9 +462,20 @@ export default function AzureCompute() {
                         <ActionBtn label="Restart" color="#0078D4" acting={acting} actKey="restart"
                           onClick={() => action(restartAzureVM, rg, vm.name, "restart")} />
                       )}
+                      {/* Pin */}
+                      <button
+                        onClick={() => togglePin({ id:`azure-vm-${vm.name}-${rg}`, name:vm.name, type:"Azure VM", cloud:"azure", status:vm.power_state||"unknown", link:"/azure/compute", meta:`${rg} · ${subscription}` })}
+                        title={isPinned(`azure-vm-${vm.name}-${rg}`) ? "Unpin" : "Pin to My Resources"}
+                        style={{ padding:"5px 8px", borderRadius:6, fontSize:13, cursor:"pointer", border:`1px solid ${isPinned(`azure-vm-${vm.name}-${rg}`) ? "#fbbf2440" : "rgba(100,116,139,0.25)"}`, background:isPinned(`azure-vm-${vm.name}-${rg}`) ? "rgba(251,191,36,0.12)" : "transparent", color:isPinned(`azure-vm-${vm.name}-${rg}`) ? "#fbbf24" : "#64748b" }}>
+                        {isPinned(`azure-vm-${vm.name}-${rg}`) ? "★" : "☆"}
+                      </button>
                       {/* Connect */}
                       <ActionBtn label="Connect" color="#50e6ff" acting={acting} actKey={null}
                         onClick={() => setConnectVM({ vm, rg })} />
+                      {vm.power_state === "running" && (
+                        <ActionBtn label="Terminal" color="#a78bfa" acting={acting} actKey={null}
+                          onClick={() => setTermVM({ vm, rg, sub: subscription })} />
+                      )}
                       {/* Schedule */}
                       <ActionBtn label="Schedule" color="#a78bfa" acting={acting} actKey={null}
                         onClick={() => setScheduleVM({ vm, rg })} />
@@ -490,7 +513,42 @@ export default function AzureCompute() {
           onClose={() => setBudgetVM(null)}
         />
       )}
+      {termVM && (
+        <AzureTerminalBridge
+          vm={termVM.vm} rg={termVM.rg} sub={termVM.sub}
+          dark={dark} onClose={() => setTermVM(null)}
+        />
+      )}
     </div>
+  )
+}
+
+// ── AzureTerminalBridge — fetches public IP then opens SSH terminal ────────────
+function AzureTerminalBridge({ vm, rg, sub, dark, onClose }) {
+  const [host, setHost] = useState("")
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    getAzureVMConnectInfo(rg, vm.name, sub)
+      .then(r => setHost(r.data?.public_ip || ""))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [rg, vm.name, sub]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (loading) return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:1200, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div style={{ color:"#fff", fontSize:14 }}>Fetching VM info…</div>
+    </div>
+  )
+
+  return (
+    <SSHTerminalModal
+      vmName={vm.name}
+      host={host}
+      cloud="azure"
+      dark={dark}
+      onClose={onClose}
+    />
   )
 }
 

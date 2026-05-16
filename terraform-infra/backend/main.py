@@ -3,6 +3,10 @@
 main.py — AIonOS Platform
 FastAPI application entry point
 """
+import sys
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -15,7 +19,7 @@ from datetime import datetime
 
 from core.config import settings
 from database import engine, Base, SessionLocal
-from models import User, VM, Request, GcpSshKey, AwsSshKey, BudgetConfig, BudgetAlertLog, VMUtilization, VMBudget, VMBudgetAlertLog
+from models import User, VM, Request, GcpSshKey, AwsSshKey, BudgetConfig, BudgetAlertLog, VMUtilization, VMBudget, VMBudgetAlertLog, CloudCredential, GcpCostSnapshot
 from routers.auth import hash_password
 
 # ── Import all routers ─────────────────────────────────────────────────────
@@ -38,6 +42,15 @@ from routers import azure_storage
 from routers import gcp_compute
 from routers import gcp_kubernetes
 from routers import monitoring
+from routers import credentials
+from routers import cloud_projects
+from routers import gcp_projects
+from routers import gcp_billing
+from routers import blueprints
+from routers import webssh
+from routers import search
+from routers import comments
+from routers import k8s_manager
 from services import gcp_client
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -55,6 +68,8 @@ def _run_migrations():
         "ALTER TABLE vms ADD COLUMN environment  VARCHAR(32)  DEFAULT 'dev'",
         "ALTER TABLE vms ADD COLUMN project_tag  VARCHAR(128)",
         "ALTER TABLE vms ADD COLUMN owner_tag    VARCHAR(128)",
+        # cloud_credentials table is created by SQLAlchemy automatically via Base.metadata.create_all
+        # No manual ALTER needed for new tables
     ]
     with engine.connect() as conn:
         for stmt in migrations:
@@ -161,6 +176,15 @@ app.include_router(azure_storage.router)
 app.include_router(gcp_compute.router)
 app.include_router(gcp_kubernetes.router)
 app.include_router(monitoring.router)
+app.include_router(credentials.router)
+app.include_router(cloud_projects.router)
+app.include_router(gcp_projects.router)
+app.include_router(gcp_billing.router)
+app.include_router(blueprints.router)
+app.include_router(search.router)
+app.include_router(comments.router)
+app.include_router(k8s_manager.router)
+app.include_router(webssh.router)
 
 
 # ──────────────────────────────────────────────────────────────────────────

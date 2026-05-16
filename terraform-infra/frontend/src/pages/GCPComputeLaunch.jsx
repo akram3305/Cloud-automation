@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate, useLocation } from "react-router-dom"
 import { useTheme } from "../context/ThemeContext"
-import { createRequest, listGCPNetworks, listGCPSubnetworks, generateGCPSSHKey } from "../api/api"
+import { createRequest, listGCPNetworks, listGCPSubnetworks, generateGCPSSHKey, createBlueprint } from "../api/api"
 import StartupScriptPicker from "../components/StartupScriptPicker"
 import CrossCloudPricing from "../components/CrossCloudPricing"
+import GCPProjectSelector from "../components/GCPProjectSelector"
 
 // ── All GCP regions ────────────────────────────────────────────────────────
 const GCP_REGIONS = [
@@ -284,6 +285,117 @@ const MACHINE_FAMILIES = [
       { name:"g2-standard-96",  vcpu:96,  ram:"384 GiB",  price:14.752,  gpu:"8× L4 24GB" },
     ],
   },
+  {
+    id:"n3", family:"N3", label:"N3 — Latest Intel (Sapphire Rapids)", color:"#4285F4",
+    desc:"Latest generation Intel Sapphire Rapids. Best single-threaded performance for latency-sensitive web workloads and databases.",
+    types:[
+      { name:"n3-standard-2",   vcpu:2,   ram:"8 GiB",    price:0.1045, recommended:true },
+      { name:"n3-standard-4",   vcpu:4,   ram:"16 GiB",   price:0.2090 },
+      { name:"n3-standard-8",   vcpu:8,   ram:"32 GiB",   price:0.4180 },
+      { name:"n3-standard-16",  vcpu:16,  ram:"64 GiB",   price:0.8360 },
+      { name:"n3-standard-22",  vcpu:22,  ram:"88 GiB",   price:1.1495 },
+      { name:"n3-standard-32",  vcpu:32,  ram:"128 GiB",  price:1.6720 },
+      { name:"n3-standard-44",  vcpu:44,  ram:"176 GiB",  price:2.2990 },
+      { name:"n3-standard-64",  vcpu:64,  ram:"256 GiB",  price:3.3440 },
+      { name:"n3-standard-88",  vcpu:88,  ram:"352 GiB",  price:4.5980 },
+      { name:"n3-standard-128", vcpu:128, ram:"512 GiB",  price:6.6880 },
+      { name:"n3-standard-176", vcpu:176, ram:"704 GiB",  price:9.1960 },
+      { name:"n3-highmem-4",    vcpu:4,   ram:"32 GiB",   price:0.2818 },
+      { name:"n3-highmem-8",    vcpu:8,   ram:"64 GiB",   price:0.5636 },
+      { name:"n3-highmem-16",   vcpu:16,  ram:"128 GiB",  price:1.1272 },
+      { name:"n3-highmem-22",   vcpu:22,  ram:"176 GiB",  price:1.5499 },
+      { name:"n3-highmem-32",   vcpu:32,  ram:"256 GiB",  price:2.2544 },
+      { name:"n3-highmem-44",   vcpu:44,  ram:"352 GiB",  price:3.0998 },
+      { name:"n3-highmem-64",   vcpu:64,  ram:"512 GiB",  price:4.5088 },
+      { name:"n3-highmem-88",   vcpu:88,  ram:"704 GiB",  price:6.1996 },
+      { name:"n3-highcpu-4",    vcpu:4,   ram:"8 GiB",    price:0.1747 },
+      { name:"n3-highcpu-8",    vcpu:8,   ram:"16 GiB",   price:0.3494 },
+      { name:"n3-highcpu-16",   vcpu:16,  ram:"32 GiB",   price:0.6988 },
+      { name:"n3-highcpu-22",   vcpu:22,  ram:"44 GiB",   price:0.9609 },
+      { name:"n3-highcpu-32",   vcpu:32,  ram:"64 GiB",   price:1.3976 },
+      { name:"n3-highcpu-44",   vcpu:44,  ram:"88 GiB",   price:1.9217 },
+      { name:"n3-highcpu-88",   vcpu:88,  ram:"176 GiB",  price:3.8434 },
+      { name:"n3-highcpu-176",  vcpu:176, ram:"352 GiB",  price:7.6868 },
+    ],
+  },
+  {
+    id:"c3", family:"C3", label:"C3 — Compute Optimised (Intel Sapphire)", color:"#FF6D00",
+    desc:"Intel Sapphire Rapids compute-optimised. Best per-core performance for HPC, CI/CD, and latency-critical applications.",
+    types:[
+      { name:"c3-standard-4",   vcpu:4,   ram:"16 GiB",   price:0.2200 },
+      { name:"c3-standard-8",   vcpu:8,   ram:"32 GiB",   price:0.4400 },
+      { name:"c3-standard-22",  vcpu:22,  ram:"88 GiB",   price:1.2100 },
+      { name:"c3-standard-44",  vcpu:44,  ram:"176 GiB",  price:2.4200 },
+      { name:"c3-standard-88",  vcpu:88,  ram:"352 GiB",  price:4.8400 },
+      { name:"c3-standard-176", vcpu:176, ram:"704 GiB",  price:9.6800 },
+      { name:"c3-highmem-4",    vcpu:4,   ram:"32 GiB",   price:0.2960 },
+      { name:"c3-highmem-8",    vcpu:8,   ram:"64 GiB",   price:0.5920 },
+      { name:"c3-highmem-22",   vcpu:22,  ram:"176 GiB",  price:1.6280 },
+      { name:"c3-highmem-44",   vcpu:44,  ram:"352 GiB",  price:3.2560 },
+      { name:"c3-highmem-88",   vcpu:88,  ram:"704 GiB",  price:6.5120 },
+      { name:"c3-highcpu-4",    vcpu:4,   ram:"8 GiB",    price:0.1840 },
+      { name:"c3-highcpu-8",    vcpu:8,   ram:"16 GiB",   price:0.3680 },
+      { name:"c3-highcpu-22",   vcpu:22,  ram:"44 GiB",   price:1.0120 },
+      { name:"c3-highcpu-44",   vcpu:44,  ram:"88 GiB",   price:2.0240 },
+      { name:"c3-highcpu-88",   vcpu:88,  ram:"176 GiB",  price:4.0480 },
+      { name:"c3-highcpu-176",  vcpu:176, ram:"352 GiB",  price:8.0960 },
+    ],
+  },
+  {
+    id:"c3d", family:"C3D", label:"C3D — Compute Optimised (AMD EPYC Genoa)", color:"#FF6D00",
+    desc:"AMD EPYC Genoa-based compute-optimised. Largest available core count — up to 360 vCPUs for the biggest compute jobs.",
+    types:[
+      { name:"c3d-standard-4",   vcpu:4,   ram:"16 GiB",   price:0.1976 },
+      { name:"c3d-standard-8",   vcpu:8,   ram:"32 GiB",   price:0.3952 },
+      { name:"c3d-standard-16",  vcpu:16,  ram:"64 GiB",   price:0.7904 },
+      { name:"c3d-standard-30",  vcpu:30,  ram:"120 GiB",  price:1.4820 },
+      { name:"c3d-standard-60",  vcpu:60,  ram:"240 GiB",  price:2.9640 },
+      { name:"c3d-standard-90",  vcpu:90,  ram:"360 GiB",  price:4.4460 },
+      { name:"c3d-standard-180", vcpu:180, ram:"720 GiB",  price:8.8920 },
+      { name:"c3d-standard-360", vcpu:360, ram:"1440 GiB", price:17.784 },
+      { name:"c3d-highmem-4",    vcpu:4,   ram:"32 GiB",   price:0.2660 },
+      { name:"c3d-highmem-8",    vcpu:8,   ram:"64 GiB",   price:0.5320 },
+      { name:"c3d-highmem-16",   vcpu:16,  ram:"128 GiB",  price:1.0640 },
+      { name:"c3d-highmem-30",   vcpu:30,  ram:"240 GiB",  price:1.9950 },
+      { name:"c3d-highmem-60",   vcpu:60,  ram:"480 GiB",  price:3.9900 },
+      { name:"c3d-highmem-90",   vcpu:90,  ram:"720 GiB",  price:5.9850 },
+      { name:"c3d-highmem-180",  vcpu:180, ram:"1440 GiB", price:11.970 },
+      { name:"c3d-highcpu-4",    vcpu:4,   ram:"8 GiB",    price:0.1660 },
+      { name:"c3d-highcpu-8",    vcpu:8,   ram:"16 GiB",   price:0.3320 },
+      { name:"c3d-highcpu-16",   vcpu:16,  ram:"32 GiB",   price:0.6640 },
+      { name:"c3d-highcpu-30",   vcpu:30,  ram:"60 GiB",   price:1.2450 },
+      { name:"c3d-highcpu-60",   vcpu:60,  ram:"120 GiB",  price:2.4900 },
+      { name:"c3d-highcpu-90",   vcpu:90,  ram:"180 GiB",  price:3.7350 },
+      { name:"c3d-highcpu-180",  vcpu:180, ram:"360 GiB",  price:7.4700 },
+      { name:"c3d-highcpu-360",  vcpu:360, ram:"720 GiB",  price:14.940 },
+    ],
+  },
+  {
+    id:"h3", family:"H3", label:"H3 — HPC (Intel Sapphire Rapids)", color:"#8b5cf6",
+    desc:"Purpose-built for tightly coupled high-performance computing (HPC) workloads with 200 Gbps EFA-equivalent networking.",
+    types:[
+      { name:"h3-standard-88", vcpu:88, ram:"352 GiB", price:6.1600 },
+    ],
+  },
+  {
+    id:"a3", family:"A3", label:"A3 — GPU (NVIDIA H100)", color:"#f43f5e",
+    desc:"NVIDIA H100 80GB GPUs — the most powerful GPUs available on GCP. Designed for large-scale AI/ML training.",
+    types:[
+      { name:"a3-highgpu-1g",  vcpu:26,  ram:"234 GiB",  price:12.952, gpu:"1× H100 80GB" },
+      { name:"a3-highgpu-2g",  vcpu:52,  ram:"468 GiB",  price:25.904, gpu:"2× H100 80GB" },
+      { name:"a3-highgpu-4g",  vcpu:104, ram:"936 GiB",  price:51.808, gpu:"4× H100 80GB" },
+      { name:"a3-highgpu-8g",  vcpu:208, ram:"1872 GiB", price:103.62, gpu:"8× H100 80GB" },
+      { name:"a3-megagpu-8g",  vcpu:208, ram:"1872 GiB", price:110.00, gpu:"8× H100 80GB (Mega)" },
+    ],
+  },
+  {
+    id:"z3", family:"Z3", label:"Z3 — Storage Optimised", color:"#06b6d4",
+    desc:"NVMe-attached local SSD storage optimised instances for latency-sensitive, high-throughput storage workloads.",
+    types:[
+      { name:"z3-standard-88",  vcpu:88,  ram:"352 GiB",  price:7.5856 },
+      { name:"z3-standard-176", vcpu:176, ram:"704 GiB",  price:15.171 },
+    ],
+  },
 ]
 
 // ── Boot images ─────────────────────────────────────────────────────────────
@@ -319,10 +431,11 @@ const STEPS = ["Name & Region", "Machine Type", "Boot Image", "Storage & Network
 const GEO_GROUPS = [...new Set(GCP_REGIONS.map(r => r.geo))]
 
 function getFamilyCategory(familyId) {
-  if (["c2", "c2d"].includes(familyId)) return "Compute Optimized"
+  if (["c2", "c2d", "c3", "c3d"].includes(familyId)) return "Compute Optimized"
   if (["m1", "m2"].includes(familyId)) return "Memory Optimized"
-  if (["a2", "g2"].includes(familyId)) return "Accelerated Computing"
+  if (["a2", "g2", "a3"].includes(familyId)) return "Accelerated Computing"
   if (["t2a", "t2d"].includes(familyId)) return "Scale-Out"
+  if (["h3", "z3"].includes(familyId)) return "HPC & Storage"
   return "General Purpose"
 }
 
@@ -330,12 +443,12 @@ const GCP_CATEGORIES = [
   {
     id:"general",  label:"General Purpose",   color:"#4285F4",
     desc:"Balanced CPU-to-memory ratio for a wide range of workloads — web serving, app servers, small databases, and development environments.",
-    families:["e2","n1","n2","n2d"],
+    families:["e2","n1","n2","n2d","n3"],
   },
   {
     id:"compute",  label:"Compute Optimised",  color:"#f59e0b",
     desc:"Highest vCPU performance-per-dollar. Ideal for HPC, gaming servers, media transcoding, scientific modelling, and batch processing.",
-    families:["c2","c2d"],
+    families:["c2","c2d","c3","c3d"],
   },
   {
     id:"memory",   label:"Memory Optimised",   color:"#a78bfa",
@@ -344,13 +457,18 @@ const GCP_CATEGORIES = [
   },
   {
     id:"gpu",      label:"GPU / ML",           color:"#f43f5e",
-    desc:"NVIDIA A100 (40 / 80 GB) and L4 GPUs for AI/ML training, inference, high-performance computing, and scientific simulations.",
-    families:["a2","g2"],
+    desc:"NVIDIA H100 (A3), A100 (A2), and L4 (G2) GPUs for AI/ML training, inference, high-performance computing, and scientific simulations.",
+    families:["a3","a2","g2"],
   },
   {
     id:"scaleout", label:"Scale-Out / ARM",    color:"#10b981",
     desc:"AMD EPYC Tau (T2D) and Ampere Altra ARM64 (T2A) optimised for cloud-native, containerised, and horizontally scaled workloads.",
     families:["t2a","t2d"],
+  },
+  {
+    id:"hpcstorage", label:"HPC & Storage",    color:"#8b5cf6",
+    desc:"H3 high-performance computing with EFA-grade networking, and Z3 storage-optimised instances with local NVMe SSDs.",
+    families:["h3","z3"],
   },
 ]
 
@@ -411,6 +529,9 @@ export default function GCPComputeLaunch() {
   const [firewallPorts,  setFirewallPorts]  = useState([])
   const [customPort,     setCustomPort]     = useState("")
   const [sourceRange,    setSourceRange]    = useState("0.0.0.0/0")
+  const [selProject,  setSelProject]  = useState(() => {
+    try { return JSON.parse(localStorage.getItem("gcp_selected_project") || "null") } catch { return null }
+  })
   const [labelEnv,    setLabelEnv]    = useState("dev")
   const [labelTeam,   setLabelTeam]   = useState("")
   const [labelProject,setLabelProject]= useState("")
@@ -419,7 +540,50 @@ export default function GCPComputeLaunch() {
   const [error,       setError]       = useState("")
   const [success,     setSuccess]     = useState(false)
   const [showCompare, setShowCompare] = useState(!!routerState?.prefill)
+  const [showBpModal, setShowBpModal] = useState(false)
+  const [bpName,      setBpName]      = useState("")
+  const [bpDesc,      setBpDesc]      = useState("")
+  const [bpSaving,    setBpSaving]    = useState(false)
+  const [bpSaved,     setBpSaved]     = useState(false)
 
+  // ── Blueprint pre-fill from sessionStorage (launched from Blueprints page) ─
+  useEffect(() => {
+    const raw = sessionStorage.getItem("blueprint_prefill")
+    if (!raw) return
+    sessionStorage.removeItem("blueprint_prefill")
+    try {
+      const c = JSON.parse(raw)
+      if (c.instName)   setInstName(c.instName)
+      if (c.region) {
+        const r = GCP_REGIONS.find(r => r.name === c.region)
+        if (r) { setRegion(r); setZone(r.zones[0]) }
+      }
+      if (c.zone)       setZone(c.zone)
+      if (c.machineType) {
+        for (const fam of MACHINE_FAMILIES) {
+          const t = fam.types.find(t => t.name === c.machineType)
+          if (t) { setMachine(t); break }
+        }
+      }
+      if (c.bootImage) {
+        const img = BOOT_IMAGES.find(i => i.name === c.bootImage)
+        if (img) setImage(img)
+      }
+      if (c.diskType) {
+        const dt = DISK_TYPES.find(d => d.id === c.diskType)
+        if (dt) setDiskType(dt)
+      }
+      if (c.diskGB)     setDiskGB(c.diskGB)
+      if (c.publicIP !== undefined)  setPublicIP(c.publicIP)
+      if (c.allowHttp !== undefined) setAllowHttp(c.allowHttp)
+      if (c.allowHttps !== undefined) setAllowHttps(c.allowHttps)
+      if (c.preemptible !== undefined) setPreemptible(c.preemptible)
+      if (c.labelEnv)   setLabelEnv(c.labelEnv)
+      if (c.labelTeam)  setLabelTeam(c.labelTeam)
+      if (c.labelProject) setLabelProject(c.labelProject)
+      setStep(STEPS.length - 1)
+    } catch {}
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── theme tokens ─────────────────────────────────────────────────────────
   const bg     = dark ? "#070c18" : "#f0f4f8"
@@ -537,6 +701,7 @@ export default function GCPComputeLaunch() {
         cloud_provider: "gcp",
         region:         region.name,
         payload: {
+          project_id:        selProject?.id || "",
           zone,
           machine_type:      machine.name,
           boot_image:        image.id,
@@ -606,8 +771,9 @@ export default function GCPComputeLaunch() {
         </button>
         <span style={{ color:muted }}>/</span>
         <span style={{ fontSize:13, fontWeight:600, color:"#4285F4" }}>Create Compute Engine Instance</span>
-        <div style={{ marginLeft:"auto", fontSize:11, color:muted }}>
-          Step {step+1} of {STEPS.length}
+        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:12 }}>
+          <GCPProjectSelector value={selProject} onChange={p => { setSelProject(p); if (p) localStorage.setItem("gcp_selected_project", JSON.stringify(p)); else localStorage.removeItem("gcp_selected_project") }} showLabel={false} compact={true} />
+          <span style={{ fontSize:11, color:muted }}>Step {step+1} of {STEPS.length}</span>
         </div>
       </div>
 
@@ -1206,30 +1372,75 @@ export default function GCPComputeLaunch() {
           )}
 
           {/* ── Navigation buttons ── */}
-          <div style={{ display:"flex", justifyContent:"space-between", marginTop:28 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:28, gap:10 }}>
             <button onClick={() => step===0 ? navigate(-1) : setStep(s=>s-1)}
               style={{ padding:"10px 24px", borderRadius:10, background:"transparent", border:`1px solid ${border}`, color:txt, fontSize:14, cursor:"pointer" }}>
               {step===0 ? "Cancel" : "← Previous"}
             </button>
-            {step < STEPS.length-1 ? (
-              <button onClick={() => setStep(s=>s+1)} disabled={step===0 && !instName.trim()}
-                style={{ padding:"10px 28px", borderRadius:10, fontSize:14, fontWeight:600, cursor:"pointer",
-                  border:"none", color:"#fff",
-                  background:(step===0&&!instName.trim())?"rgba(66,133,244,0.35)":"linear-gradient(135deg,#4285F4,#34A853)",
-                  boxShadow: (step===0&&!instName.trim()) ? "none" : "0 4px 12px rgba(66,133,244,0.35)" }}>
-                Next →
-              </button>
-            ) : (
-              <button onClick={handleLaunch} disabled={submitting}
-                style={{ padding:"10px 32px", borderRadius:10, fontSize:14, fontWeight:700, cursor:"pointer",
-                  border:"none", color:"#fff",
-                  background:"linear-gradient(135deg,#4285F4,#34A853)",
-                  boxShadow:"0 4px 16px rgba(66,133,244,0.4)", opacity:submitting?0.7:1 }}>
-                {submitting ? "Creating…" : "🚀 Create Instance"}
-              </button>
-            )}
+            <div style={{ display:"flex", gap:8 }}>
+              {step === STEPS.length-1 && (
+                <button onClick={() => { setBpName(instName||""); setBpDesc(`${machine.name} · ${image.name.split(" ").slice(0,2).join(" ")} · ${region.display.split(",")[0]}`); setShowBpModal(true) }}
+                  style={{ padding:"10px 18px", borderRadius:10, fontSize:13, fontWeight:600, cursor:"pointer",
+                    border:"1px solid rgba(0,212,170,0.4)", background:"rgba(0,212,170,0.08)", color:"#00d4aa",
+                    display:"flex", alignItems:"center", gap:5 }}>
+                  💾 Save as Blueprint
+                </button>
+              )}
+              {step < STEPS.length-1 ? (
+                <button onClick={() => setStep(s=>s+1)} disabled={step===0 && !instName.trim()}
+                  style={{ padding:"10px 28px", borderRadius:10, fontSize:14, fontWeight:600, cursor:"pointer",
+                    border:"none", color:"#fff",
+                    background:(step===0&&!instName.trim())?"rgba(66,133,244,0.35)":"linear-gradient(135deg,#4285F4,#34A853)",
+                    boxShadow: (step===0&&!instName.trim()) ? "none" : "0 4px 12px rgba(66,133,244,0.35)" }}>
+                  Next →
+                </button>
+              ) : (
+                <button onClick={handleLaunch} disabled={submitting}
+                  style={{ padding:"10px 32px", borderRadius:10, fontSize:14, fontWeight:700, cursor:"pointer",
+                    border:"none", color:"#fff",
+                    background:"linear-gradient(135deg,#4285F4,#34A853)",
+                    boxShadow:"0 4px 16px rgba(66,133,244,0.4)", opacity:submitting?0.7:1 }}>
+                  {submitting ? "Creating…" : "🚀 Create Instance"}
+                </button>
+              )}
+            </div>
           </div>
         </div>
+
+        {/* Blueprint save modal */}
+        {showBpModal && (
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.55)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(4px)" }}>
+            <div style={{ background:surf, borderRadius:14, padding:26, width:400, border:`1px solid ${border}`, boxShadow:"0 20px 60px rgba(0,0,0,0.4)" }}>
+              <div style={{ fontSize:16, fontWeight:800, color:txt, marginBottom:4 }}>Save as Blueprint</div>
+              <p style={{ fontSize:12, color:muted, marginBottom:18 }}>Relaunch this exact GCP VM configuration in one click from the Blueprints page.</p>
+              {bpSaved ? (
+                <div style={{ padding:"12px 16px", borderRadius:9, background:"rgba(0,212,170,0.12)", border:"1px solid rgba(0,212,170,0.3)", color:"#00d4aa", fontSize:13, fontWeight:600, textAlign:"center" }}>
+                  ✓ Blueprint saved! Find it in <a href="/blueprints" style={{ color:"#00d4aa" }}>Blueprints</a>.
+                </div>
+              ) : (
+                <>
+                  <input value={bpName} onChange={e=>setBpName(e.target.value)} placeholder="Blueprint name *"
+                    style={{ width:"100%", padding:"9px 12px", borderRadius:8, border:`1px solid ${border}`, background: dark?"#1e293b":"#f8faff", color:txt, fontSize:13, fontFamily:"inherit", outline:"none", boxSizing:"border-box", marginBottom:10 }} />
+                  <input value={bpDesc} onChange={e=>setBpDesc(e.target.value)} placeholder="Description (optional)"
+                    style={{ width:"100%", padding:"9px 12px", borderRadius:8, border:`1px solid ${border}`, background: dark?"#1e293b":"#f8faff", color:txt, fontSize:13, fontFamily:"inherit", outline:"none", boxSizing:"border-box", marginBottom:16 }} />
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button onClick={() => setShowBpModal(false)} style={{ flex:1, padding:"8px", borderRadius:8, border:`1px solid ${border}`, background:"transparent", color:muted, fontSize:13, cursor:"pointer" }}>Cancel</button>
+                    <button disabled={!bpName.trim()||bpSaving} onClick={async () => {
+                      setBpSaving(true)
+                      try {
+                        await createBlueprint({ name:bpName, description:bpDesc, cloud:"gcp", resource_type:"vm", icon:"⚡",
+                          config:{ instName, region:region.name, zone, machineType:machine.name, bootImage:image.name, diskType:diskType.id, diskGB, publicIP, allowHttp, allowHttps, preemptible, labelEnv, labelTeam, labelProject }})
+                        setBpSaved(true)
+                      } catch {} finally { setBpSaving(false) }
+                    }} style={{ flex:2, padding:"8px", borderRadius:8, border:"none", background:"linear-gradient(135deg,#4285F4,#34A853)", color:"#fff", fontSize:13, fontWeight:700, cursor:bpName.trim()&&!bpSaving?"pointer":"not-allowed", opacity:bpName.trim()&&!bpSaving?1:0.6 }}>
+                      {bpSaving ? "Saving…" : "Save Blueprint"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ── Right panel — cost estimate ── */}
         <div style={{ background:surf, borderLeft:`1px solid ${border}`, padding:22, position:"sticky",

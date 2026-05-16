@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react"
 import { useNavigate, useLocation } from "react-router-dom"
 import { useTheme } from "../context/ThemeContext"
-import api, { getPriceEstimate, createRequest } from "../api/api"
+import api, { getPriceEstimate, createRequest, createBlueprint } from "../api/api"
 import CrossCloudPricing from "../components/CrossCloudPricing"
 
 // ── Instance families — on-demand pricing (ap-south-1) ───────────────────
@@ -9,83 +9,217 @@ const INSTANCE_FAMILIES = [
   {
     group:"General Purpose", color:"#3b82f6", desc:"Balanced compute, memory, and networking for a wide range of workloads",
     types:[
-      { t:"t3.micro",    vcpu:2,  ram:"1 GiB",    price:0.0114, network:"Up to 5 Gbps",   free:true },
-      { t:"t3.small",    vcpu:2,  ram:"2 GiB",    price:0.0228, network:"Up to 5 Gbps" },
-      { t:"t3.medium",   vcpu:2,  ram:"4 GiB",    price:0.0456, network:"Up to 5 Gbps" },
-      { t:"t3.large",    vcpu:2,  ram:"8 GiB",    price:0.0912, network:"Up to 5 Gbps" },
-      { t:"t3.xlarge",   vcpu:4,  ram:"16 GiB",   price:0.1824, network:"Up to 5 Gbps" },
-      { t:"t3.2xlarge",  vcpu:8,  ram:"32 GiB",   price:0.3648, network:"Up to 5 Gbps" },
-      { t:"m5.large",    vcpu:2,  ram:"8 GiB",    price:0.1070, network:"Up to 10 Gbps" },
-      { t:"m5.xlarge",   vcpu:4,  ram:"16 GiB",   price:0.2140, network:"Up to 10 Gbps" },
-      { t:"m5.2xlarge",  vcpu:8,  ram:"32 GiB",   price:0.4280, network:"Up to 10 Gbps" },
-      { t:"m5.4xlarge",  vcpu:16, ram:"64 GiB",   price:0.8560, network:"Up to 10 Gbps" },
-      { t:"m6i.large",   vcpu:2,  ram:"8 GiB",    price:0.1120, network:"Up to 12.5 Gbps" },
-      { t:"m6i.xlarge",  vcpu:4,  ram:"16 GiB",   price:0.2240, network:"Up to 12.5 Gbps" },
-      { t:"m6i.2xlarge", vcpu:8,  ram:"32 GiB",   price:0.4480, network:"Up to 12.5 Gbps" },
-      { t:"m6i.4xlarge", vcpu:16, ram:"64 GiB",   price:0.8960, network:"12.5 Gbps" },
+      { t:"t3.micro",     vcpu:2,   ram:"1 GiB",    price:0.0114,  network:"Up to 5 Gbps",    free:true },
+      { t:"t3.small",     vcpu:2,   ram:"2 GiB",    price:0.0228,  network:"Up to 5 Gbps" },
+      { t:"t3.medium",    vcpu:2,   ram:"4 GiB",    price:0.0456,  network:"Up to 5 Gbps" },
+      { t:"t3.large",     vcpu:2,   ram:"8 GiB",    price:0.0912,  network:"Up to 5 Gbps" },
+      { t:"t3.xlarge",    vcpu:4,   ram:"16 GiB",   price:0.1824,  network:"Up to 5 Gbps" },
+      { t:"t3.2xlarge",   vcpu:8,   ram:"32 GiB",   price:0.3648,  network:"Up to 5 Gbps" },
+      { t:"t3a.micro",    vcpu:2,   ram:"1 GiB",    price:0.0102,  network:"Up to 5 Gbps",    note:"AMD" },
+      { t:"t3a.small",    vcpu:2,   ram:"2 GiB",    price:0.0204,  network:"Up to 5 Gbps",    note:"AMD" },
+      { t:"t3a.medium",   vcpu:2,   ram:"4 GiB",    price:0.0408,  network:"Up to 5 Gbps",    note:"AMD" },
+      { t:"t3a.large",    vcpu:2,   ram:"8 GiB",    price:0.0816,  network:"Up to 5 Gbps",    note:"AMD" },
+      { t:"t3a.xlarge",   vcpu:4,   ram:"16 GiB",   price:0.1632,  network:"Up to 5 Gbps",    note:"AMD" },
+      { t:"t3a.2xlarge",  vcpu:8,   ram:"32 GiB",   price:0.3264,  network:"Up to 5 Gbps",    note:"AMD" },
+      { t:"m5.large",     vcpu:2,   ram:"8 GiB",    price:0.1070,  network:"Up to 10 Gbps" },
+      { t:"m5.xlarge",    vcpu:4,   ram:"16 GiB",   price:0.2140,  network:"Up to 10 Gbps" },
+      { t:"m5.2xlarge",   vcpu:8,   ram:"32 GiB",   price:0.4280,  network:"Up to 10 Gbps" },
+      { t:"m5.4xlarge",   vcpu:16,  ram:"64 GiB",   price:0.8560,  network:"Up to 10 Gbps" },
+      { t:"m5.8xlarge",   vcpu:32,  ram:"128 GiB",  price:1.7120,  network:"10 Gbps" },
+      { t:"m5.12xlarge",  vcpu:48,  ram:"192 GiB",  price:2.5680,  network:"12 Gbps" },
+      { t:"m5a.large",    vcpu:2,   ram:"8 GiB",    price:0.0960,  network:"Up to 10 Gbps",   note:"AMD" },
+      { t:"m5a.xlarge",   vcpu:4,   ram:"16 GiB",   price:0.1920,  network:"Up to 10 Gbps",   note:"AMD" },
+      { t:"m5a.2xlarge",  vcpu:8,   ram:"32 GiB",   price:0.3840,  network:"Up to 10 Gbps",   note:"AMD" },
+      { t:"m5a.4xlarge",  vcpu:16,  ram:"64 GiB",   price:0.7680,  network:"Up to 10 Gbps",   note:"AMD" },
+      { t:"m6i.large",    vcpu:2,   ram:"8 GiB",    price:0.1120,  network:"Up to 12.5 Gbps" },
+      { t:"m6i.xlarge",   vcpu:4,   ram:"16 GiB",   price:0.2240,  network:"Up to 12.5 Gbps" },
+      { t:"m6i.2xlarge",  vcpu:8,   ram:"32 GiB",   price:0.4480,  network:"Up to 12.5 Gbps" },
+      { t:"m6i.4xlarge",  vcpu:16,  ram:"64 GiB",   price:0.8960,  network:"12.5 Gbps" },
+      { t:"m6i.8xlarge",  vcpu:32,  ram:"128 GiB",  price:1.7920,  network:"12.5 Gbps" },
+      { t:"m6i.12xlarge", vcpu:48,  ram:"192 GiB",  price:2.6880,  network:"18.75 Gbps" },
+      { t:"m6i.16xlarge", vcpu:64,  ram:"256 GiB",  price:3.5840,  network:"25 Gbps" },
+      { t:"m6a.large",    vcpu:2,   ram:"8 GiB",    price:0.1008,  network:"Up to 12.5 Gbps", note:"AMD" },
+      { t:"m6a.xlarge",   vcpu:4,   ram:"16 GiB",   price:0.2016,  network:"Up to 12.5 Gbps", note:"AMD" },
+      { t:"m6a.2xlarge",  vcpu:8,   ram:"32 GiB",   price:0.4032,  network:"Up to 12.5 Gbps", note:"AMD" },
+      { t:"m6a.4xlarge",  vcpu:16,  ram:"64 GiB",   price:0.8064,  network:"Up to 12.5 Gbps", note:"AMD" },
+      { t:"m6a.8xlarge",  vcpu:32,  ram:"128 GiB",  price:1.6128,  network:"12.5 Gbps",       note:"AMD" },
+      { t:"m7i.large",    vcpu:2,   ram:"8 GiB",    price:0.1176,  network:"Up to 12.5 Gbps", note:"Intel Sapphire Rapids" },
+      { t:"m7i.xlarge",   vcpu:4,   ram:"16 GiB",   price:0.2352,  network:"Up to 12.5 Gbps", note:"Intel Sapphire Rapids" },
+      { t:"m7i.2xlarge",  vcpu:8,   ram:"32 GiB",   price:0.4704,  network:"Up to 12.5 Gbps", note:"Intel Sapphire Rapids" },
+      { t:"m7i.4xlarge",  vcpu:16,  ram:"64 GiB",   price:0.9408,  network:"Up to 12.5 Gbps", note:"Intel Sapphire Rapids" },
+      { t:"m7i.8xlarge",  vcpu:32,  ram:"128 GiB",  price:1.8816,  network:"15 Gbps",          note:"Intel Sapphire Rapids" },
     ],
   },
   {
     group:"Compute Optimised", color:"#f59e0b", desc:"High performance processors for compute-intensive workloads — web servers, HPC, batch",
     types:[
-      { t:"c5.large",    vcpu:2,  ram:"4 GiB",    price:0.0960, network:"Up to 10 Gbps" },
-      { t:"c5.xlarge",   vcpu:4,  ram:"8 GiB",    price:0.1920, network:"Up to 10 Gbps" },
-      { t:"c5.2xlarge",  vcpu:8,  ram:"16 GiB",   price:0.3840, network:"Up to 10 Gbps" },
-      { t:"c5.4xlarge",  vcpu:16, ram:"32 GiB",   price:0.7680, network:"10 Gbps" },
-      { t:"c6i.large",   vcpu:2,  ram:"4 GiB",    price:0.0952, network:"Up to 12.5 Gbps" },
-      { t:"c6i.xlarge",  vcpu:4,  ram:"8 GiB",    price:0.1904, network:"Up to 12.5 Gbps" },
-      { t:"c6i.2xlarge", vcpu:8,  ram:"16 GiB",   price:0.3808, network:"Up to 12.5 Gbps" },
-      { t:"c6i.4xlarge", vcpu:16, ram:"32 GiB",   price:0.7616, network:"12.5 Gbps" },
-      { t:"c5n.large",   vcpu:2,  ram:"5.25 GiB", price:0.1260, network:"Up to 25 Gbps" },
-      { t:"c5n.xlarge",  vcpu:4,  ram:"10.5 GiB", price:0.2520, network:"Up to 25 Gbps" },
-      { t:"c5n.2xlarge", vcpu:8,  ram:"21 GiB",   price:0.5040, network:"Up to 25 Gbps" },
+      { t:"c5.large",     vcpu:2,  ram:"4 GiB",    price:0.0960,  network:"Up to 10 Gbps" },
+      { t:"c5.xlarge",    vcpu:4,  ram:"8 GiB",    price:0.1920,  network:"Up to 10 Gbps" },
+      { t:"c5.2xlarge",   vcpu:8,  ram:"16 GiB",   price:0.3840,  network:"Up to 10 Gbps" },
+      { t:"c5.4xlarge",   vcpu:16, ram:"32 GiB",   price:0.7680,  network:"10 Gbps" },
+      { t:"c5.9xlarge",   vcpu:36, ram:"72 GiB",   price:1.7280,  network:"10 Gbps" },
+      { t:"c5.18xlarge",  vcpu:72, ram:"144 GiB",  price:3.4560,  network:"25 Gbps" },
+      { t:"c5a.large",    vcpu:2,  ram:"4 GiB",    price:0.0860,  network:"Up to 10 Gbps",   note:"AMD" },
+      { t:"c5a.xlarge",   vcpu:4,  ram:"8 GiB",    price:0.1720,  network:"Up to 10 Gbps",   note:"AMD" },
+      { t:"c5a.2xlarge",  vcpu:8,  ram:"16 GiB",   price:0.3440,  network:"Up to 10 Gbps",   note:"AMD" },
+      { t:"c5a.4xlarge",  vcpu:16, ram:"32 GiB",   price:0.6880,  network:"Up to 10 Gbps",   note:"AMD" },
+      { t:"c5a.8xlarge",  vcpu:32, ram:"64 GiB",   price:1.3760,  network:"10 Gbps",          note:"AMD" },
+      { t:"c6i.large",    vcpu:2,  ram:"4 GiB",    price:0.0952,  network:"Up to 12.5 Gbps" },
+      { t:"c6i.xlarge",   vcpu:4,  ram:"8 GiB",    price:0.1904,  network:"Up to 12.5 Gbps" },
+      { t:"c6i.2xlarge",  vcpu:8,  ram:"16 GiB",   price:0.3808,  network:"Up to 12.5 Gbps" },
+      { t:"c6i.4xlarge",  vcpu:16, ram:"32 GiB",   price:0.7616,  network:"12.5 Gbps" },
+      { t:"c6i.8xlarge",  vcpu:32, ram:"64 GiB",   price:1.5232,  network:"12.5 Gbps" },
+      { t:"c6i.12xlarge", vcpu:48, ram:"96 GiB",   price:2.2848,  network:"18.75 Gbps" },
+      { t:"c6i.16xlarge", vcpu:64, ram:"128 GiB",  price:3.0464,  network:"25 Gbps" },
+      { t:"c6a.large",    vcpu:2,  ram:"4 GiB",    price:0.0857,  network:"Up to 12.5 Gbps", note:"AMD" },
+      { t:"c6a.xlarge",   vcpu:4,  ram:"8 GiB",    price:0.1714,  network:"Up to 12.5 Gbps", note:"AMD" },
+      { t:"c6a.2xlarge",  vcpu:8,  ram:"16 GiB",   price:0.3428,  network:"Up to 12.5 Gbps", note:"AMD" },
+      { t:"c6a.4xlarge",  vcpu:16, ram:"32 GiB",   price:0.6856,  network:"Up to 12.5 Gbps", note:"AMD" },
+      { t:"c6a.8xlarge",  vcpu:32, ram:"64 GiB",   price:1.3712,  network:"12.5 Gbps",        note:"AMD" },
+      { t:"c6a.16xlarge", vcpu:64, ram:"128 GiB",  price:2.7424,  network:"20 Gbps",          note:"AMD" },
+      { t:"c7i.large",    vcpu:2,  ram:"4 GiB",    price:0.1000,  network:"Up to 12.5 Gbps", note:"Intel Sapphire" },
+      { t:"c7i.xlarge",   vcpu:4,  ram:"8 GiB",    price:0.2000,  network:"Up to 12.5 Gbps", note:"Intel Sapphire" },
+      { t:"c7i.2xlarge",  vcpu:8,  ram:"16 GiB",   price:0.4000,  network:"Up to 12.5 Gbps", note:"Intel Sapphire" },
+      { t:"c7i.4xlarge",  vcpu:16, ram:"32 GiB",   price:0.8000,  network:"Up to 12.5 Gbps", note:"Intel Sapphire" },
+      { t:"c5n.large",    vcpu:2,  ram:"5.25 GiB", price:0.1260,  network:"Up to 25 Gbps" },
+      { t:"c5n.xlarge",   vcpu:4,  ram:"10.5 GiB", price:0.2520,  network:"Up to 25 Gbps" },
+      { t:"c5n.2xlarge",  vcpu:8,  ram:"21 GiB",   price:0.5040,  network:"Up to 25 Gbps" },
+      { t:"c5n.4xlarge",  vcpu:16, ram:"42 GiB",   price:1.0080,  network:"25 Gbps" },
+      { t:"c5n.9xlarge",  vcpu:36, ram:"96 GiB",   price:2.2680,  network:"50 Gbps" },
+      { t:"c5n.18xlarge", vcpu:72, ram:"192 GiB",  price:4.5360,  network:"100 Gbps" },
     ],
   },
   {
     group:"Memory Optimised", color:"#a78bfa", desc:"Fast performance for workloads that process large in-memory datasets — databases, caches",
     types:[
-      { t:"r5.large",       vcpu:2,  ram:"16 GiB",   price:0.1410, network:"Up to 10 Gbps" },
-      { t:"r5.xlarge",      vcpu:4,  ram:"32 GiB",   price:0.2820, network:"Up to 10 Gbps" },
-      { t:"r5.2xlarge",     vcpu:8,  ram:"64 GiB",   price:0.5640, network:"Up to 10 Gbps" },
-      { t:"r5.4xlarge",     vcpu:16, ram:"128 GiB",  price:1.0080, network:"Up to 10 Gbps" },
-      { t:"r6i.large",      vcpu:2,  ram:"16 GiB",   price:0.1470, network:"Up to 12.5 Gbps" },
-      { t:"r6i.xlarge",     vcpu:4,  ram:"32 GiB",   price:0.2940, network:"Up to 12.5 Gbps" },
-      { t:"r6i.2xlarge",    vcpu:8,  ram:"64 GiB",   price:0.5880, network:"Up to 12.5 Gbps" },
-      { t:"r6i.4xlarge",    vcpu:16, ram:"128 GiB",  price:1.1760, network:"12.5 Gbps" },
-      { t:"x2idn.16xlarge", vcpu:64, ram:"1024 GiB", price:6.6690, network:"50 Gbps" },
+      { t:"r5.large",      vcpu:2,   ram:"16 GiB",   price:0.1410,  network:"Up to 10 Gbps" },
+      { t:"r5.xlarge",     vcpu:4,   ram:"32 GiB",   price:0.2820,  network:"Up to 10 Gbps" },
+      { t:"r5.2xlarge",    vcpu:8,   ram:"64 GiB",   price:0.5640,  network:"Up to 10 Gbps" },
+      { t:"r5.4xlarge",    vcpu:16,  ram:"128 GiB",  price:1.0080,  network:"Up to 10 Gbps" },
+      { t:"r5.8xlarge",    vcpu:32,  ram:"256 GiB",  price:2.0160,  network:"10 Gbps" },
+      { t:"r5.12xlarge",   vcpu:48,  ram:"384 GiB",  price:3.0240,  network:"10 Gbps" },
+      { t:"r5.16xlarge",   vcpu:64,  ram:"512 GiB",  price:4.0320,  network:"20 Gbps" },
+      { t:"r5a.large",     vcpu:2,   ram:"16 GiB",   price:0.1260,  network:"Up to 10 Gbps",   note:"AMD" },
+      { t:"r5a.xlarge",    vcpu:4,   ram:"32 GiB",   price:0.2520,  network:"Up to 10 Gbps",   note:"AMD" },
+      { t:"r5a.2xlarge",   vcpu:8,   ram:"64 GiB",   price:0.5040,  network:"Up to 10 Gbps",   note:"AMD" },
+      { t:"r5a.4xlarge",   vcpu:16,  ram:"128 GiB",  price:1.0080,  network:"Up to 10 Gbps",   note:"AMD" },
+      { t:"r5b.large",     vcpu:2,   ram:"16 GiB",   price:0.1680,  network:"Up to 10 Gbps",   note:"EBS optimised" },
+      { t:"r5b.xlarge",    vcpu:4,   ram:"32 GiB",   price:0.3360,  network:"Up to 10 Gbps",   note:"EBS optimised" },
+      { t:"r5b.2xlarge",   vcpu:8,   ram:"64 GiB",   price:0.6720,  network:"Up to 10 Gbps",   note:"EBS optimised" },
+      { t:"r5b.4xlarge",   vcpu:16,  ram:"128 GiB",  price:1.3440,  network:"Up to 10 Gbps",   note:"EBS optimised" },
+      { t:"r6i.large",     vcpu:2,   ram:"16 GiB",   price:0.1470,  network:"Up to 12.5 Gbps" },
+      { t:"r6i.xlarge",    vcpu:4,   ram:"32 GiB",   price:0.2940,  network:"Up to 12.5 Gbps" },
+      { t:"r6i.2xlarge",   vcpu:8,   ram:"64 GiB",   price:0.5880,  network:"Up to 12.5 Gbps" },
+      { t:"r6i.4xlarge",   vcpu:16,  ram:"128 GiB",  price:1.1760,  network:"12.5 Gbps" },
+      { t:"r6i.8xlarge",   vcpu:32,  ram:"256 GiB",  price:2.3520,  network:"12.5 Gbps" },
+      { t:"r6i.16xlarge",  vcpu:64,  ram:"512 GiB",  price:4.7040,  network:"25 Gbps" },
+      { t:"r6a.large",     vcpu:2,   ram:"16 GiB",   price:0.1323,  network:"Up to 12.5 Gbps", note:"AMD" },
+      { t:"r6a.xlarge",    vcpu:4,   ram:"32 GiB",   price:0.2646,  network:"Up to 12.5 Gbps", note:"AMD" },
+      { t:"r6a.2xlarge",   vcpu:8,   ram:"64 GiB",   price:0.5292,  network:"Up to 12.5 Gbps", note:"AMD" },
+      { t:"r6a.4xlarge",   vcpu:16,  ram:"128 GiB",  price:1.0584,  network:"Up to 12.5 Gbps", note:"AMD" },
+      { t:"x1e.xlarge",    vcpu:4,   ram:"122 GiB",  price:1.0000,  network:"Up to 10 Gbps",   note:"SAP HANA" },
+      { t:"x1e.2xlarge",   vcpu:8,   ram:"244 GiB",  price:2.0000,  network:"Up to 10 Gbps",   note:"SAP HANA" },
+      { t:"x2idn.16xlarge",vcpu:64,  ram:"1024 GiB", price:6.6690,  network:"50 Gbps",         note:"NVMe" },
+      { t:"x2idn.32xlarge",vcpu:128, ram:"2048 GiB", price:13.338,  network:"100 Gbps",         note:"NVMe" },
+    ],
+  },
+  {
+    group:"Storage Optimised", color:"#06b6d4", desc:"High sequential read/write performance for workloads that need fast local NVMe storage",
+    types:[
+      { t:"i3.large",      vcpu:2,  ram:"15.25 GiB", price:0.1750,  network:"Up to 10 Gbps",  note:"NVMe SSD" },
+      { t:"i3.xlarge",     vcpu:4,  ram:"30.5 GiB",  price:0.3500,  network:"Up to 10 Gbps",  note:"NVMe SSD" },
+      { t:"i3.2xlarge",    vcpu:8,  ram:"61 GiB",    price:0.7000,  network:"Up to 10 Gbps",  note:"NVMe SSD" },
+      { t:"i3.4xlarge",    vcpu:16, ram:"122 GiB",   price:1.4000,  network:"Up to 10 Gbps",  note:"NVMe SSD" },
+      { t:"i3.8xlarge",    vcpu:32, ram:"244 GiB",   price:2.8000,  network:"10 Gbps",         note:"NVMe SSD" },
+      { t:"i3en.large",    vcpu:2,  ram:"16 GiB",    price:0.2760,  network:"Up to 25 Gbps",  note:"Dense NVMe" },
+      { t:"i3en.xlarge",   vcpu:4,  ram:"32 GiB",    price:0.5520,  network:"Up to 25 Gbps",  note:"Dense NVMe" },
+      { t:"i3en.2xlarge",  vcpu:8,  ram:"64 GiB",    price:1.1040,  network:"Up to 25 Gbps",  note:"Dense NVMe" },
+      { t:"i4i.large",     vcpu:2,  ram:"16 GiB",    price:0.3737,  network:"Up to 10 Gbps",  note:"Gen4 NVMe" },
+      { t:"i4i.xlarge",    vcpu:4,  ram:"32 GiB",    price:0.7474,  network:"Up to 10 Gbps",  note:"Gen4 NVMe" },
+      { t:"i4i.2xlarge",   vcpu:8,  ram:"64 GiB",    price:1.4948,  network:"Up to 10 Gbps",  note:"Gen4 NVMe" },
+      { t:"i4i.4xlarge",   vcpu:16, ram:"128 GiB",   price:2.9895,  network:"Up to 10 Gbps",  note:"Gen4 NVMe" },
+      { t:"d3.xlarge",     vcpu:4,  ram:"32 GiB",    price:0.2990,  network:"Up to 15 Gbps",  note:"Dense HDD" },
+      { t:"d3.2xlarge",    vcpu:8,  ram:"64 GiB",    price:0.5980,  network:"Up to 15 Gbps",  note:"Dense HDD" },
+      { t:"d3.4xlarge",    vcpu:16, ram:"128 GiB",   price:1.1960,  network:"15 Gbps",         note:"Dense HDD" },
     ],
   },
   {
     group:"GPU / ML", color:"#f43f5e", desc:"Accelerated computing with NVIDIA GPUs for machine learning, AI inference, and graphics",
     types:[
-      { t:"g4dn.xlarge",  vcpu:4,  ram:"16 GiB", price:0.7360, network:"Up to 25 Gbps", gpu:"1x NVIDIA T4" },
-      { t:"g4dn.2xlarge", vcpu:8,  ram:"32 GiB", price:1.1760, network:"Up to 25 Gbps", gpu:"1x NVIDIA T4" },
-      { t:"g4dn.4xlarge", vcpu:16, ram:"64 GiB", price:1.5040, network:"Up to 25 Gbps", gpu:"1x NVIDIA T4" },
-      { t:"p3.2xlarge",   vcpu:8,  ram:"61 GiB", price:3.0600, network:"Up to 10 Gbps", gpu:"1x NVIDIA V100" },
-      { t:"p3.8xlarge",   vcpu:32, ram:"244 GiB",price:12.240, network:"10 Gbps",        gpu:"4x NVIDIA V100" },
+      { t:"g4dn.xlarge",   vcpu:4,  ram:"16 GiB",   price:0.7360,  network:"Up to 25 Gbps",  gpu:"1x NVIDIA T4" },
+      { t:"g4dn.2xlarge",  vcpu:8,  ram:"32 GiB",   price:1.1760,  network:"Up to 25 Gbps",  gpu:"1x NVIDIA T4" },
+      { t:"g4dn.4xlarge",  vcpu:16, ram:"64 GiB",   price:1.5040,  network:"Up to 25 Gbps",  gpu:"1x NVIDIA T4" },
+      { t:"g4dn.8xlarge",  vcpu:32, ram:"128 GiB",  price:2.2640,  network:"50 Gbps",         gpu:"1x NVIDIA T4" },
+      { t:"g5.xlarge",     vcpu:4,  ram:"16 GiB",   price:1.0060,  network:"Up to 10 Gbps",  gpu:"1x NVIDIA A10G" },
+      { t:"g5.2xlarge",    vcpu:8,  ram:"32 GiB",   price:1.2120,  network:"Up to 10 Gbps",  gpu:"1x NVIDIA A10G" },
+      { t:"g5.4xlarge",    vcpu:16, ram:"64 GiB",   price:1.6240,  network:"Up to 25 Gbps",  gpu:"1x NVIDIA A10G" },
+      { t:"g5.8xlarge",    vcpu:32, ram:"128 GiB",  price:2.4480,  network:"25 Gbps",         gpu:"1x NVIDIA A10G" },
+      { t:"g5.12xlarge",   vcpu:48, ram:"192 GiB",  price:5.6720,  network:"40 Gbps",         gpu:"4x NVIDIA A10G" },
+      { t:"g5.24xlarge",   vcpu:96, ram:"384 GiB",  price:8.1440,  network:"50 Gbps",         gpu:"4x NVIDIA A10G" },
+      { t:"p3.2xlarge",    vcpu:8,  ram:"61 GiB",   price:3.0600,  network:"Up to 10 Gbps",  gpu:"1x NVIDIA V100" },
+      { t:"p3.8xlarge",    vcpu:32, ram:"244 GiB",  price:12.240,  network:"10 Gbps",         gpu:"4x NVIDIA V100" },
+      { t:"p3.16xlarge",   vcpu:64, ram:"488 GiB",  price:24.480,  network:"25 Gbps",         gpu:"8x NVIDIA V100" },
+      { t:"p4d.24xlarge",  vcpu:96, ram:"1152 GiB", price:32.773,  network:"400 Gbps",        gpu:"8x NVIDIA A100 40GB" },
     ],
   },
   {
-    group:"ARM / Graviton", color:"#00d4aa", desc:"Best price-performance for a wide variety of workloads using AWS Graviton3 processors",
+    group:"AI Inference", color:"#ec4899", desc:"AWS Inferentia and Trainium chips — purpose-built for ML inference and training at lowest cost",
     types:[
-      { t:"t4g.micro",   vcpu:2, ram:"1 GiB",  price:0.0091, network:"Up to 5 Gbps", free:true },
-      { t:"t4g.small",   vcpu:2, ram:"2 GiB",  price:0.0183, network:"Up to 5 Gbps" },
-      { t:"t4g.medium",  vcpu:2, ram:"4 GiB",  price:0.0365, network:"Up to 5 Gbps" },
-      { t:"t4g.large",   vcpu:2, ram:"8 GiB",  price:0.0730, network:"Up to 5 Gbps" },
-      { t:"m6g.large",   vcpu:2, ram:"8 GiB",  price:0.0770, network:"Up to 10 Gbps" },
-      { t:"m6g.xlarge",  vcpu:4, ram:"16 GiB", price:0.1540, network:"Up to 10 Gbps" },
-      { t:"m6g.2xlarge", vcpu:8, ram:"32 GiB", price:0.3080, network:"Up to 10 Gbps" },
-      { t:"c6g.large",   vcpu:2, ram:"4 GiB",  price:0.0680, network:"Up to 10 Gbps" },
-      { t:"c6g.xlarge",  vcpu:4, ram:"8 GiB",  price:0.1360, network:"Up to 10 Gbps" },
+      { t:"inf1.xlarge",   vcpu:4,  ram:"8 GiB",    price:0.2280,  network:"Up to 25 Gbps",  note:"1x Inferentia" },
+      { t:"inf1.2xlarge",  vcpu:8,  ram:"16 GiB",   price:0.4560,  network:"Up to 25 Gbps",  note:"1x Inferentia" },
+      { t:"inf1.6xlarge",  vcpu:24, ram:"48 GiB",   price:1.3680,  network:"25 Gbps",         note:"4x Inferentia" },
+      { t:"inf1.24xlarge", vcpu:96, ram:"192 GiB",  price:5.4720,  network:"100 Gbps",        note:"16x Inferentia" },
+      { t:"inf2.xlarge",   vcpu:4,  ram:"16 GiB",   price:0.7582,  network:"Up to 15 Gbps",  note:"1x Inferentia2" },
+      { t:"inf2.8xlarge",  vcpu:32, ram:"128 GiB",  price:1.9670,  network:"25 Gbps",         note:"1x Inferentia2" },
+      { t:"inf2.24xlarge", vcpu:96, ram:"384 GiB",  price:6.4905,  network:"50 Gbps",         note:"6x Inferentia2" },
     ],
   },
   {
-    group:"Network Optimized", color:"#06b6d4", desc:"Enhanced networking up to 100 Gbps for latency-sensitive, HPC, and data-intensive workloads",
+    group:"ARM / Graviton", color:"#00d4aa", desc:"Best price-performance for a wide variety of workloads using AWS Graviton2/3 processors",
     types:[
-      { t:"c5n.4xlarge",  vcpu:16, ram:"42 GiB",   price:1.0080, network:"25 Gbps" },
-      { t:"c5n.9xlarge",  vcpu:36, ram:"96 GiB",   price:2.2680, network:"50 Gbps" },
-      { t:"c5n.18xlarge", vcpu:72, ram:"192 GiB",  price:4.5360, network:"100 Gbps" },
-      { t:"p4d.24xlarge", vcpu:96, ram:"1152 GiB", price:32.773, network:"400 Gbps", gpu:"8x NVIDIA A100 40GB" },
+      { t:"t4g.micro",     vcpu:2,  ram:"1 GiB",    price:0.0091,  network:"Up to 5 Gbps",    free:true },
+      { t:"t4g.small",     vcpu:2,  ram:"2 GiB",    price:0.0183,  network:"Up to 5 Gbps" },
+      { t:"t4g.medium",    vcpu:2,  ram:"4 GiB",    price:0.0365,  network:"Up to 5 Gbps" },
+      { t:"t4g.large",     vcpu:2,  ram:"8 GiB",    price:0.0730,  network:"Up to 5 Gbps" },
+      { t:"t4g.xlarge",    vcpu:4,  ram:"16 GiB",   price:0.1461,  network:"Up to 5 Gbps" },
+      { t:"t4g.2xlarge",   vcpu:8,  ram:"32 GiB",   price:0.2922,  network:"Up to 5 Gbps" },
+      { t:"m6g.medium",    vcpu:1,  ram:"4 GiB",    price:0.0385,  network:"Up to 10 Gbps" },
+      { t:"m6g.large",     vcpu:2,  ram:"8 GiB",    price:0.0770,  network:"Up to 10 Gbps" },
+      { t:"m6g.xlarge",    vcpu:4,  ram:"16 GiB",   price:0.1540,  network:"Up to 10 Gbps" },
+      { t:"m6g.2xlarge",   vcpu:8,  ram:"32 GiB",   price:0.3080,  network:"Up to 10 Gbps" },
+      { t:"m6g.4xlarge",   vcpu:16, ram:"64 GiB",   price:0.6160,  network:"Up to 10 Gbps" },
+      { t:"m6g.8xlarge",   vcpu:32, ram:"128 GiB",  price:1.2320,  network:"12 Gbps" },
+      { t:"m7g.medium",    vcpu:1,  ram:"4 GiB",    price:0.0408,  network:"Up to 12.5 Gbps", note:"Graviton3" },
+      { t:"m7g.large",     vcpu:2,  ram:"8 GiB",    price:0.0816,  network:"Up to 12.5 Gbps", note:"Graviton3" },
+      { t:"m7g.xlarge",    vcpu:4,  ram:"16 GiB",   price:0.1633,  network:"Up to 12.5 Gbps", note:"Graviton3" },
+      { t:"m7g.2xlarge",   vcpu:8,  ram:"32 GiB",   price:0.3266,  network:"Up to 12.5 Gbps", note:"Graviton3" },
+      { t:"m7g.4xlarge",   vcpu:16, ram:"64 GiB",   price:0.6531,  network:"Up to 12.5 Gbps", note:"Graviton3" },
+      { t:"c6g.medium",    vcpu:1,  ram:"2 GiB",    price:0.0340,  network:"Up to 10 Gbps" },
+      { t:"c6g.large",     vcpu:2,  ram:"4 GiB",    price:0.0680,  network:"Up to 10 Gbps" },
+      { t:"c6g.xlarge",    vcpu:4,  ram:"8 GiB",    price:0.1360,  network:"Up to 10 Gbps" },
+      { t:"c6g.2xlarge",   vcpu:8,  ram:"16 GiB",   price:0.2720,  network:"Up to 10 Gbps" },
+      { t:"c6g.4xlarge",   vcpu:16, ram:"32 GiB",   price:0.5440,  network:"Up to 10 Gbps" },
+      { t:"c7g.large",     vcpu:2,  ram:"4 GiB",    price:0.0725,  network:"Up to 12.5 Gbps", note:"Graviton3" },
+      { t:"c7g.xlarge",    vcpu:4,  ram:"8 GiB",    price:0.1450,  network:"Up to 12.5 Gbps", note:"Graviton3" },
+      { t:"c7g.2xlarge",   vcpu:8,  ram:"16 GiB",   price:0.2900,  network:"Up to 12.5 Gbps", note:"Graviton3" },
+      { t:"c7g.4xlarge",   vcpu:16, ram:"32 GiB",   price:0.5800,  network:"Up to 12.5 Gbps", note:"Graviton3" },
+      { t:"r6g.large",     vcpu:2,  ram:"16 GiB",   price:0.1260,  network:"Up to 10 Gbps" },
+      { t:"r6g.xlarge",    vcpu:4,  ram:"32 GiB",   price:0.2520,  network:"Up to 10 Gbps" },
+      { t:"r6g.2xlarge",   vcpu:8,  ram:"64 GiB",   price:0.5040,  network:"Up to 10 Gbps" },
+      { t:"r6g.4xlarge",   vcpu:16, ram:"128 GiB",  price:1.0080,  network:"Up to 10 Gbps" },
+      { t:"r7g.large",     vcpu:2,  ram:"16 GiB",   price:0.1344,  network:"Up to 12.5 Gbps", note:"Graviton3" },
+      { t:"r7g.xlarge",    vcpu:4,  ram:"32 GiB",   price:0.2689,  network:"Up to 12.5 Gbps", note:"Graviton3" },
+      { t:"r7g.2xlarge",   vcpu:8,  ram:"64 GiB",   price:0.5378,  network:"Up to 12.5 Gbps", note:"Graviton3" },
+    ],
+  },
+  {
+    group:"HPC & Network Optimized", color:"#8b5cf6", desc:"High-performance computing instances with EFA networking for tightly-coupled parallel workloads",
+    types:[
+      { t:"hpc6a.48xlarge",vcpu:96, ram:"384 GiB",  price:5.2668,  network:"100 Gbps EFA",    note:"AMD EPYC" },
+      { t:"hpc7g.4xlarge", vcpu:16, ram:"128 GiB",  price:1.6832,  network:"200 Gbps EFA",    note:"Graviton3E" },
+      { t:"hpc7g.8xlarge", vcpu:32, ram:"128 GiB",  price:3.3664,  network:"200 Gbps EFA",    note:"Graviton3E" },
+      { t:"hpc7g.16xlarge",vcpu:64, ram:"128 GiB",  price:6.7328,  network:"200 Gbps EFA",    note:"Graviton3E" },
+      { t:"p4d.24xlarge",  vcpu:96, ram:"1152 GiB", price:32.773,  network:"400 Gbps EFA",    gpu:"8x NVIDIA A100 40GB" },
     ],
   },
 ]
@@ -159,6 +293,11 @@ export default function EC2Launch() {
   const [error,          setError]         = useState("")
   const [success,        setSuccess]       = useState(false)
   const [showCompare,    setShowCompare]   = useState(false)
+  const [showBpModal,    setShowBpModal]   = useState(false)
+  const [bpName,         setBpName]        = useState("")
+  const [bpDesc,         setBpDesc]        = useState("")
+  const [bpSaving,       setBpSaving]      = useState(false)
+  const [bpSaved,        setBpSaved]       = useState(false)
 
   // Pre-select instance when redirected from cross-cloud comparison
   useEffect(() => {
@@ -176,6 +315,44 @@ export default function EC2Launch() {
       })
     })
     if (best) { setFamilyIdx(bestFi); setInstance(best); setStep(2) }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Blueprint pre-fill from sessionStorage (launched from Blueprints page) ─
+  useEffect(() => {
+    const raw = sessionStorage.getItem("blueprint_prefill")
+    if (!raw) return
+    sessionStorage.removeItem("blueprint_prefill")
+    try {
+      const c = JSON.parse(raw)
+      if (c.name)        setName(c.name)
+      if (c.region)      setRegion(c.region)
+      if (c.env)         setEnv(c.env)
+      if (c.appPurpose)  setAppPurpose(c.appPurpose)
+      if (c.project)     setProject(c.project)
+      if (c.owner)       setOwner(c.owner)
+      if (c.ami) {
+        const found = AMIS.find(a => a.id === c.ami?.id || a.name === c.ami?.name)
+        if (found) setAmi(found)
+      }
+      if (c.instance?.t) {
+        let best = null, bestFi = 0
+        INSTANCE_FAMILIES.forEach((fam, fi) => {
+          fam.types.forEach(t => { if (t.t === c.instance.t) { best = t; bestFi = fi } })
+        })
+        if (best) { setFamilyIdx(bestFi); setInstance(best) }
+      }
+      if (c.keyPair !== undefined)   setKeyPair(c.keyPair)
+      if (c.publicIP !== undefined)  setPublicIP(c.publicIP)
+      if (c.allowSSH !== undefined)  setAllowSSH(c.allowSSH)
+      if (c.allowHTTP !== undefined) setAllowHTTP(c.allowHTTP)
+      if (c.allowHTTPS !== undefined) setAllowHTTPS(c.allowHTTPS)
+      if (c.rootGB)      setRootGB(c.rootGB)
+      if (c.ebsType?.id) {
+        const et = EBS_TYPES.find(e => e.id === c.ebsType.id)
+        if (et) setEbsType(et)
+      }
+      setStep(STEPS.length - 1)
+    } catch {}
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -629,27 +806,72 @@ export default function EC2Launch() {
           )}
 
           {/* Navigation */}
-          <div style={{ display:"flex", justifyContent:"space-between", marginTop:32, paddingTop:24, borderTop:`1px solid ${border}` }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:32, paddingTop:24, borderTop:`1px solid ${border}`, gap:10 }}>
             <button onClick={() => step === 0 ? navigate(-1) : setStep(s => s - 1)}
               style={{ padding:"10px 24px", borderRadius:10, background:"transparent", border:`1px solid ${border}`, color:text, fontSize:14, cursor:"pointer" }}>
               {step === 0 ? "Cancel" : "← Previous"}
             </button>
-            {step < STEPS.length - 1 ? (
-              <button onClick={() => setStep(s => s + 1)} disabled={step === 0 && !name}
-                style={{ padding:"10px 28px", borderRadius:10, fontSize:14, fontWeight:600, cursor:(step===0&&!name)?"not-allowed":"pointer",
-                  background:(step===0&&!name)?"rgba(255,153,0,0.4)":"linear-gradient(135deg,#FF9900,#FFB347)",
-                  border:"none", color:"#fff", boxShadow:"0 4px 12px rgba(255,153,0,0.35)", opacity:(step===0&&!name)?0.7:1 }}>
-                Next Step →
-              </button>
-            ) : (
-              <button onClick={handleLaunch} disabled={submitting}
-                style={{ padding:"10px 32px", borderRadius:10, fontSize:14, fontWeight:700, cursor:submitting?"not-allowed":"pointer",
-                  background:"linear-gradient(135deg,#FF9900,#FFB347)", border:"none", color:"#fff",
-                  boxShadow:"0 4px 16px rgba(255,153,0,0.4)", opacity:submitting?0.7:1 }}>
-                {submitting ? "Launching..." : "Launch Instance"}
-              </button>
-            )}
+            <div style={{ display:"flex", gap:8 }}>
+              {step === STEPS.length - 1 && (
+                <button onClick={() => { setBpName(name||""); setBpDesc(`${instance.t} · ${ami.name.split(" ").slice(0,2).join(" ")} · ${region}`); setShowBpModal(true) }}
+                  style={{ padding:"10px 18px", borderRadius:10, fontSize:13, fontWeight:600, cursor:"pointer",
+                    border:"1px solid rgba(0,212,170,0.4)", background:"rgba(0,212,170,0.08)", color:"#00d4aa",
+                    display:"flex", alignItems:"center", gap:5 }}>
+                  💾 Save as Blueprint
+                </button>
+              )}
+              {step < STEPS.length - 1 ? (
+                <button onClick={() => setStep(s => s + 1)} disabled={step === 0 && !name}
+                  style={{ padding:"10px 28px", borderRadius:10, fontSize:14, fontWeight:600, cursor:(step===0&&!name)?"not-allowed":"pointer",
+                    background:(step===0&&!name)?"rgba(255,153,0,0.4)":"linear-gradient(135deg,#FF9900,#FFB347)",
+                    border:"none", color:"#fff", boxShadow:"0 4px 12px rgba(255,153,0,0.35)", opacity:(step===0&&!name)?0.7:1 }}>
+                  Next Step →
+                </button>
+              ) : (
+                <button onClick={handleLaunch} disabled={submitting}
+                  style={{ padding:"10px 32px", borderRadius:10, fontSize:14, fontWeight:700, cursor:submitting?"not-allowed":"pointer",
+                    background:"linear-gradient(135deg,#FF9900,#FFB347)", border:"none", color:"#fff",
+                    boxShadow:"0 4px 16px rgba(255,153,0,0.4)", opacity:submitting?0.7:1 }}>
+                  {submitting ? "Launching..." : "Launch Instance"}
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* Blueprint save modal */}
+          {showBpModal && (
+            <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.55)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(4px)" }}>
+              <div style={{ background:surface, borderRadius:14, padding:26, width:400, border:`1px solid ${border}`, boxShadow:"0 20px 60px rgba(0,0,0,0.4)" }}>
+                <div style={{ fontSize:16, fontWeight:800, color:text, marginBottom:4 }}>Save as Blueprint</div>
+                <p style={{ fontSize:12, color:muted, marginBottom:18 }}>Relaunch this exact EC2 configuration in one click from the Blueprints page.</p>
+                {bpSaved ? (
+                  <div style={{ padding:"12px 16px", borderRadius:9, background:"rgba(0,212,170,0.12)", border:"1px solid rgba(0,212,170,0.3)", color:"#00d4aa", fontSize:13, fontWeight:600, textAlign:"center" }}>
+                    ✓ Blueprint saved! Find it in <a href="/blueprints" style={{ color:"#00d4aa" }}>Blueprints</a>.
+                  </div>
+                ) : (
+                  <>
+                    <input value={bpName} onChange={e=>setBpName(e.target.value)} placeholder="Blueprint name *"
+                      style={{ width:"100%", padding:"9px 12px", borderRadius:8, border:`1px solid ${border}`, background: dark?"#1e293b":"#f8faff", color:text, fontSize:13, fontFamily:"inherit", outline:"none", boxSizing:"border-box", marginBottom:10 }} />
+                    <input value={bpDesc} onChange={e=>setBpDesc(e.target.value)} placeholder="Description (optional)"
+                      style={{ width:"100%", padding:"9px 12px", borderRadius:8, border:`1px solid ${border}`, background: dark?"#1e293b":"#f8faff", color:text, fontSize:13, fontFamily:"inherit", outline:"none", boxSizing:"border-box", marginBottom:16 }} />
+                    <div style={{ display:"flex", gap:8 }}>
+                      <button onClick={() => setShowBpModal(false)} style={{ flex:1, padding:"8px", borderRadius:8, border:`1px solid ${border}`, background:"transparent", color:muted, fontSize:13, cursor:"pointer" }}>Cancel</button>
+                      <button disabled={!bpName.trim()||bpSaving} onClick={async () => {
+                        setBpSaving(true)
+                        try {
+                          await createBlueprint({ name:bpName, description:bpDesc, cloud:"aws", resource_type:"vm", icon:"🖥",
+                            config:{ name, region, instance, ami, keyPair, publicIP, allowSSH, allowHTTP, allowHTTPS, rootGB, ebsType:{ id:ebsType.id }, env, appPurpose, project, owner }})
+                          setBpSaved(true)
+                        } catch {} finally { setBpSaving(false) }
+                      }} style={{ flex:2, padding:"8px", borderRadius:8, border:"none", background:"linear-gradient(135deg,#00d4aa,#00b896)", color:"#fff", fontSize:13, fontWeight:700, cursor:bpName.trim()&&!bpSaving?"pointer":"not-allowed", opacity:bpName.trim()&&!bpSaving?1:0.6 }}>
+                        {bpSaving ? "Saving…" : "Save Blueprint"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── Right: cost panel ── */}

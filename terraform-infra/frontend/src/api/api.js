@@ -84,7 +84,9 @@ export default api
 export const getForecast       = ()         => api.get('/cost/forecast')
 export const getVMCosts        = ()         => api.get('/cost/vms/realtime')
 export const getMonthlyCost    = (months=6) => api.get('/cost/monthly', { params: { months } })
-export const getActivityLogs   = (limit=50, hours=72) => api.get('/logs/activity', { params: { limit, hours } })
+export const getActivityLogs         = (limit=100, hours=72, cloud="all") => api.get('/logs/activity', { params: { limit, hours, cloud } })
+export const recordUserAction        = (body) => api.post('/logs/user-action', body)
+export const getUsersActivitySummary = ()     => api.get('/logs/users/summary')
 export const getAlerts         = (unreadOnly=false)   => api.get('/alerts', { params: { unread_only: unreadOnly } })
 export const getAlertCount     = ()                   => api.get('/alerts/unread/count')
 export const markAlertRead     = (id)                 => api.patch(`/alerts/${id}/read`)
@@ -179,3 +181,45 @@ export const createVMBudget      = (data)      => api.post('/monitoring/vm-budge
 export const updateVMBudget      = (id, data)  => api.put(`/monitoring/vm-budgets/${id}`, data)
 export const deleteVMBudget      = (id)        => api.delete(`/monitoring/vm-budgets/${id}`)
 export const getVMBudgetAlerts   = ()          => api.get('/monitoring/vm-budget-alerts')
+
+// ── Org Credentials ──────────────────────────────────────────────────────────
+export const getCredentials      = ()          => api.get('/credentials')
+export const updateCredentials   = (data)      => api.put('/credentials', data)
+export const testCredentials     = (provider)  => api.post(`/credentials/${provider}/test`)
+
+// ── Cloud Projects / Accounts ────────────────────────────────────────────────
+export const listCloudProjects   = ()          => api.get('/cloud-projects')
+
+// ── GCP Org-level Projects ───────────────────────────────────────────────────
+export const listGCPOrgProjects      = ()                      => api.get('/gcp/projects')
+export const listGCPOrgProjectsQuick = ()                      => api.get('/gcp/projects?quick=true')
+
+// ── K8s Pod Manager (EKS + GKE) ──────────────────────────────────────────────
+export const eksNamespaces = (cluster, region)               => api.get(`/k8s/eks/${encodeURIComponent(cluster)}/namespaces?region=${region}`)
+export const eksPods       = (cluster, region, ns='default') => api.get(`/k8s/eks/${encodeURIComponent(cluster)}/pods?region=${region}&namespace=${ns}`)
+export const eksPodLogs    = (cluster, region, ns, pod, tail=200) => api.get(`/k8s/eks/${encodeURIComponent(cluster)}/pods/${ns}/${pod}/logs?region=${region}&tail=${tail}`)
+export const gkeNamespaces = (cluster, location)             => api.get(`/k8s/gke/${encodeURIComponent(cluster)}/namespaces?location=${location}`)
+export const gkePods       = (cluster, location, ns='default') => api.get(`/k8s/gke/${encodeURIComponent(cluster)}/pods?location=${location}&namespace=${ns}`)
+export const gkePodLogs    = (cluster, location, ns, pod, tail=200) => api.get(`/k8s/gke/${encodeURIComponent(cluster)}/pods/${ns}/${pod}/logs?location=${location}&tail=${tail}`)
+export const getGCPProjectSummary = (projectId)               => api.get(`/gcp/projects/${projectId}/summary`)
+export const createGCPProject    = (data)                      => api.post('/gcp/projects/create', data)
+
+// ── GCP Billing ──────────────────────────────────────────────────────────────
+export const getGCPBillingOverview   = (projectId=null)       => api.get('/gcp/billing/overview',    projectId ? { params: { project_id: projectId } } : {})
+export const getGCPBillingMonthly    = (projectId=null, months=3) => api.get('/gcp/billing/monthly', { params: { ...(projectId ? { project_id: projectId } : {}), months } })
+export const getGCPBillingDaily      = (projectId=null, days=30)  => api.get('/gcp/billing/daily',   { params: { ...(projectId ? { project_id: projectId } : {}), days   } })
+export const getGCPBillingByService  = (projectId=null)       => api.get('/gcp/billing/by-service',  projectId ? { params: { project_id: projectId } } : {})
+export const getGCPBillingTopResources = (projectId=null)     => api.get('/gcp/billing/top-resources', projectId ? { params: { project_id: projectId } } : {})
+
+// ── Blueprints ────────────────────────────────────────────────────────────────
+export const listBlueprints    = (cloud="all", resource_type="all") => api.get('/blueprints', { params: { cloud, resource_type } })
+export const createBlueprint   = (data)    => api.post('/blueprints', data)
+export const getBlueprint      = (id)      => api.get(`/blueprints/${id}`)
+export const updateBlueprint   = (id, d)   => api.put(`/blueprints/${id}`, d)
+export const deleteBlueprint   = (id)      => api.delete(`/blueprints/${id}`)
+export const launchBlueprint   = (id)      => api.post(`/blueprints/${id}/launch`)
+
+export const searchResources = (q) => api.get(`/search?q=${encodeURIComponent(q)}`)
+
+export const getRequestComments = (id)       => api.get(`/requests/${id}/comments`)
+export const addRequestComment  = (id, text) => api.post(`/requests/${id}/comments`, { text })

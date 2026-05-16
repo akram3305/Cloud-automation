@@ -7,3 +7,8 @@ from .aws_ssh_key import AwsSshKey
 from .budget import BudgetConfig, BudgetAlertLog
 from .vm_utilization import VMUtilization
 from .vm_budget import VMBudget, VMBudgetAlertLog
+from .cloud_credential import CloudCredential
+from .gcp_cost_snapshot import GcpCostSnapshot
+from .user_activity import UserActivity
+from .blueprint import Blueprint
+from .request_comment import RequestComment

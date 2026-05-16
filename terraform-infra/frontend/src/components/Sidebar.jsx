@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import { NavLink, useNavigate, useLocation } from "react-router-dom"
 import NotificationBell from "./NotificationBell"
 import { useTheme } from "../context/ThemeContext"
-import { listRequests } from "../api/api"
+import { listRequests, searchResources } from "../api/api"
 
 // ── Search index ──────────────────────────────────────────────────────────
 const SEARCH_INDEX = [
@@ -25,8 +25,12 @@ const SEARCH_INDEX = [
   { cloud:"gcp",   label:"GCP VPC Networks",     path:"/gcp/network",         cat:"GCP Network",   icon:"M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945" },
   { cloud:"azure", label:"Azure All Services",   path:"/azure/services",      cat:"Azure",          icon:"M4 6h16M4 10h16M4 14h16M4 18h16" },
   { cloud:"gcp",   label:"GCP All Services",     path:"/gcp/services",        cat:"GCP",            icon:"M4 6h16M4 10h16M4 14h16M4 18h16" },
+  { cloud:"gcp",   label:"GCP Projects & Billing", path:"/gcp/projects",       cat:"GCP Org",        icon:"M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
   { cloud:"platform", label:"Kubernetes Hub",   path:"/kubernetes",          cat:"Platform",   icon:"M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" },
   { cloud:"platform", label:"Monitoring",       path:"/monitoring",          cat:"Platform",   icon:"M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" },
+  { cloud:"platform", label:"Org Projects",     path:"/org-projects",        cat:"Platform",   icon:"M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
+  { cloud:"platform", label:"Blueprints",       path:"/blueprints",          cat:"Platform",   icon:"M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" },
+  { cloud:"platform", label:"Settings",         path:"/settings",            cat:"Platform",   icon:"M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" },
 ]
 
 // ── Cloud config ──────────────────────────────────────────────────────────
@@ -115,9 +119,8 @@ const NAV = {
       { label:"Cloud Functions",   path:null,                icon:"M13 2L3 14h9l-1 8 10-12h-9l1-8z", soon:true },
       { label:"Pub/Sub",           path:null,                icon:"M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4", soon:true },
     ]},
-    { cat:"COST & OPS", links:[
-      { label:"Cost by Project",   path:"/gcp/cost",         icon:"M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
-      { label:"Cloud Monitoring",  path:null,                icon:"M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z", soon:true },
+    { cat:"ORGANIZATION", links:[
+      { label:"Projects & Billing", path:"/gcp/projects",     icon:"M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
     ]},
   ],
 }
@@ -141,9 +144,18 @@ const PLATFORM_NAV = [
   { label:"Monitoring",      path:"/monitoring", badge:null,
     icon:"M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z",
     color:"#f59e0b" },
+  { label:"Org Projects",   path:"/org-projects", badge:null,
+    icon:"M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+    color:"#34A853", adminOnly: false },
+  { label:"Blueprints",     path:"/blueprints", badge:null,
+    icon:"M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01",
+    color:"#f59e0b", adminOnly: false },
+  { label:"Settings",       path:"/settings", badge:null,
+    icon:"M12 2a10 10 0 00-6.36 17.72M12 2a10 10 0 016.36 17.72M12 2v4M12 22v-4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M22 12h-4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83",
+    color:"#a78bfa", adminOnly: true },
 ]
 
-const PLATFORM_PATHS = ["/overview", "/approvals", "/activity", "/tfstate", "/kubernetes", "/monitoring"]
+const PLATFORM_PATHS = ["/overview", "/approvals", "/activity", "/tfstate", "/kubernetes", "/monitoring", "/org-projects", "/blueprints", "/settings"]
 
 function detectCloud(path) {
   if (PLATFORM_PATHS.includes(path)) return "platform"
@@ -179,9 +191,12 @@ export default function Sidebar() {
   const user = JSON.parse(localStorage.getItem("user") || "{}")
   const searchRef = useRef(null)
 
-  const [openCloud,    setOpenCloud]    = useState(() => detectCloud(location.pathname))
-  const [searchQ,      setSearchQ]      = useState("")
-  const [pendingCount, setPendingCount] = useState(0)
+  const [openCloud,      setOpenCloud]      = useState(() => detectCloud(location.pathname))
+  const [searchQ,        setSearchQ]        = useState("")
+  const [resourceResults, setResourceResults] = useState([])
+  const [searchLoading,  setSearchLoading]  = useState(false)
+  const [pendingCount,   setPendingCount]   = useState(0)
+  const debounceRef = useRef(null)
 
   useEffect(() => {
     listRequests().then(r => {
@@ -199,6 +214,21 @@ export default function Sidebar() {
   const searchResults = searchQ.trim().length > 0
     ? SEARCH_INDEX.filter(s => s.label.toLowerCase().includes(searchQ.toLowerCase()))
     : []
+
+  // Debounced backend resource search
+  useEffect(() => {
+    const q = searchQ.trim()
+    if (q.length < 2) { setResourceResults([]); return }
+    clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      setSearchLoading(true)
+      searchResources(q)
+        .then(r => setResourceResults(r.data?.results || []))
+        .catch(() => setResourceResults([]))
+        .finally(() => setSearchLoading(false))
+    }, 320)
+    return () => clearTimeout(debounceRef.current)
+  }, [searchQ])
 
   // ── Theme tokens ──────────────────────────────────────────────────
   const sidebarBg   = dark ? "linear-gradient(180deg,#07091a 0%,#0b1225 50%,#07091a 100%)" : "linear-gradient(180deg,#f8faff 0%,#eef2ff 100%)"
@@ -375,6 +405,41 @@ export default function Sidebar() {
             <div style={{ fontSize:9.5, color:textMuted, letterSpacing:"0.05em" }}>Multi-Cloud Platform</div>
           </div>
           <NotificationBell />
+          <button
+            onClick={toggle}
+            title={dark ? "Switch to light mode" : "Switch to dark mode"}
+            style={{
+              width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)",
+              border: `1px solid ${borderColor}`,
+              cursor: "pointer", transition: "all 0.2s",
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = dark ? "rgba(255,255,255,0.13)" : "rgba(0,0,0,0.1)"}
+            onMouseLeave={e => e.currentTarget.style.background = dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)"}
+          >
+            {dark ? (
+              /* sun — click to go light */
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                stroke="#fbbf24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="5"/>
+                <line x1="12" y1="1"  x2="12" y2="3"/>
+                <line x1="12" y1="21" x2="12" y2="23"/>
+                <line x1="4.22" y1="4.22"  x2="5.64" y2="5.64"/>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                <line x1="1"  y1="12" x2="3"  y2="12"/>
+                <line x1="21" y1="12" x2="23" y2="12"/>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+                <line x1="18.36" y1="5.64"  x2="19.78" y2="4.22"/>
+              </svg>
+            ) : (
+              /* moon — click to go dark */
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+              </svg>
+            )}
+          </button>
         </div>
 
         <div style={{ position:"relative" }}>
@@ -424,10 +489,39 @@ export default function Sidebar() {
             ))}
           </div>
         )}
-        {searchQ && searchResults.length===0 && (
-          <div style={{ padding:"20px 12px", textAlign:"center", color:textMuted, fontSize:12 }}>No services match "{searchQ}"</div>
+        {searchQ && searchResults.length===0 && resourceResults.length===0 && !searchLoading && (
+          <div style={{ padding:"20px 12px", textAlign:"center", color:textMuted, fontSize:12 }}>No results for "{searchQ}"</div>
         )}
 
+        {/* Resource results from backend */}
+        {(resourceResults.length > 0 || (searchLoading && searchQ.length >= 2)) && (
+          <div style={{ marginBottom:8 }}>
+            <div style={{ fontSize:"9px", fontWeight:700, letterSpacing:"0.12em", color:"#00d4aa", padding:"6px 12px 4px", textTransform:"uppercase", display:"flex", alignItems:"center", gap:6 }}>
+              Resources
+              {searchLoading && <span style={{ width:8, height:8, borderRadius:"50%", border:"1.5px solid #00d4aa", borderTopColor:"transparent", display:"inline-block", animation:"spin 0.6s linear infinite" }} />}
+            </div>
+            {resourceResults.map(r => {
+              const cloudColors = { aws:"#FF9900", gcp:"#4285F4", azure:"#0078D4" }
+              const statusDots  = { running:"#22c55e", RUNNING:"#22c55e", stopped:"#f59e0b", STOPPED:"#f59e0b", pending:"#3b82f6", approved:"#22c55e", rejected:"#ef4444" }
+              const cc = cloudColors[r.cloud] || "#64748b"
+              const sd = statusDots[r.status] || "#64748b"
+              return (
+                <button key={r.id} className="sb-btn-plain sb-sr-item"
+                  onClick={()=>{ navigate(r.link); setSearchQ("") }}
+                  style={{ width:"100%", display:"flex", alignItems:"center", gap:8, padding:"7px 12px", borderRadius:9, marginBottom:1, background:"transparent", color:textMuted, transition:"all 0.15s ease", textAlign:"left" }}>
+                  {/* cloud badge */}
+                  <span style={{ fontSize:"9px", fontWeight:700, padding:"2px 5px", borderRadius:4, background:`${cc}18`, color:cc, flexShrink:0, textTransform:"uppercase" }}>{r.cloud}</span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:12, color:textPrimary, fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{r.name}</div>
+                    <div style={{ fontSize:10, color:textMuted }}>{r.type}{r.meta ? ` · ${r.meta}` : ""}</div>
+                  </div>
+                  {/* status dot */}
+                  <span style={{ width:6, height:6, borderRadius:"50%", background:sd, flexShrink:0 }} />
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         {/* ── PLATFORM SECTION ── */}
         {!searchQ && (
@@ -440,7 +534,7 @@ export default function Sidebar() {
             </div>
             <div style={{ marginBottom:8, background:dark?"rgba(0,212,170,0.03)":"rgba(0,212,170,0.04)",
               borderRadius:11, border:`1px solid rgba(0,212,170,0.1)`, padding:"3px" }}>
-              {PLATFORM_NAV.map(item => {
+              {PLATFORM_NAV.filter(item => !item.adminOnly || user.role === "admin").map(item => {
                 const isActive = location.pathname === item.path
                 const badgeVal = item.badge === "pending" ? pendingCount : 0
                 return (

@@ -48,6 +48,10 @@ export default function GCPDashboard() {
   const { dark } = useTheme()
   const navigate  = useNavigate()
 
+  const selectedProject = (() => {
+    try { return JSON.parse(localStorage.getItem("gcp_selected_project") || "null") } catch { return null }
+  })()
+
   const [health,     setHealth]     = useState(null)
   const [instances,  setInstances]  = useState([])
   const [costData,   setCostData]   = useState(null)
@@ -156,6 +160,31 @@ export default function GCPDashboard() {
         </div>
       </div>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+
+      {/* ── Project selector banner ── */}
+      <div style={{ margin:"16px 28px 0", padding:"11px 16px", borderRadius:10,
+        background: selectedProject ? "rgba(52,168,83,0.07)" : "rgba(66,133,244,0.07)",
+        border: `1px solid ${selectedProject ? "rgba(52,168,83,0.25)" : "rgba(66,133,244,0.25)"}`,
+        display:"flex", alignItems:"center", gap:10, fontSize:12 }}>
+        <span style={{ color: selectedProject ? "#34A853" : "#4285F4", fontWeight:600 }}>
+          {selectedProject ? `Project: ${selectedProject.name} (${selectedProject.id})` : "Using default project from credentials"}
+        </span>
+        <button onClick={() => navigate("/gcp/projects")}
+          style={{ marginLeft:"auto", padding:"4px 12px", borderRadius:7, fontSize:11, fontWeight:600,
+            background: selectedProject ? "rgba(52,168,83,0.15)" : "rgba(66,133,244,0.15)",
+            border: `1px solid ${selectedProject ? "rgba(52,168,83,0.3)" : "rgba(66,133,244,0.3)"}`,
+            color: selectedProject ? "#34A853" : "#4285F4", cursor:"pointer" }}>
+          {selectedProject ? "Switch Project" : "Browse All Projects"}
+        </button>
+        {selectedProject && (
+          <button onClick={() => { localStorage.removeItem("gcp_selected_project"); window.location.reload() }}
+            style={{ padding:"4px 10px", borderRadius:7, fontSize:11, fontWeight:600,
+              background:"rgba(244,63,94,0.08)", border:"1px solid rgba(244,63,94,0.2)",
+              color:"#f43f5e", cursor:"pointer" }}>
+            Clear
+          </button>
+        )}
+      </div>
 
       {/* ── Not configured banner ── */}
       {!connected && !loading && (

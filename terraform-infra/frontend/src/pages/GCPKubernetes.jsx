@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react"
 import { useNavigate } from "react-router-dom"
 import { useTheme } from "../context/ThemeContext"
 import { listGKEClusters } from "../api/api"
+import K8sPodManager from "../components/K8sPodManager"
 
 function SvgIcon({ d, size = 16, color = "currentColor" }) {
   return (
@@ -490,6 +491,7 @@ export default function GCPKubernetes() {
   const [search,       setSearch]       = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
   const [detail,       setDetail]       = useState(null)
+  const [podCluster,   setPodCluster]   = useState(null)  // {name, location}
   const [showGuide,    setShowGuide]    = useState(false)
   const [lastRefresh,  setLastRefresh]  = useState(null)
 
@@ -784,11 +786,20 @@ export default function GCPKubernetes() {
                       </td>
                       <td style={{ padding:"12px 16px", fontSize:11, color:muted, whiteSpace:"nowrap" }}>{createdAt}</td>
                       <td style={{ padding:"12px 16px" }}>
-                        <button onClick={e => { e.stopPropagation(); setDetail(cluster) }}
-                          style={{ padding:"6px 12px", borderRadius:8, fontSize:11, fontWeight:600, cursor:"pointer",
-                            background:input, border:`1px solid ${border}`, color:txt }}>
-                          Details
-                        </button>
+                        <div style={{ display:"flex", gap:"6px" }}>
+                          {cluster.status === "completed" && cfg.region && (
+                            <button onClick={e => { e.stopPropagation(); setPodCluster({ name: cfg.resource_name || cluster.resource_name, location: cfg.region }) }}
+                              style={{ padding:"5px 10px", borderRadius:7, fontSize:11, fontWeight:600, cursor:"pointer",
+                                background:"#4285F410", border:`1px solid #4285F440`, color:"#4285F4", whiteSpace:"nowrap" }}>
+                              ☸ Pods
+                            </button>
+                          )}
+                          <button onClick={e => { e.stopPropagation(); setDetail(cluster) }}
+                            style={{ padding:"6px 12px", borderRadius:8, fontSize:11, fontWeight:600, cursor:"pointer",
+                              background:input, border:`1px solid ${border}`, color:txt }}>
+                            Details
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   )
@@ -815,6 +826,15 @@ export default function GCPKubernetes() {
 
       {detail    && <ClusterDetailModal cluster={detail} dark={dark} onClose={() => setDetail(null)} />}
       {showGuide && <HowToModal dark={dark} onClose={() => setShowGuide(false)} />}
+      {podCluster && (
+        <K8sPodManager
+          cloud="gke"
+          clusterName={podCluster.name}
+          location={podCluster.location}
+          dark={dark}
+          onClose={() => setPodCluster(null)}
+        />
+      )}
     </div>
   )
 }

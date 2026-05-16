@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react"
-import { listBuckets, deleteBucket, listObjects, deleteObject, getDownloadUrl, getS3Stats } from "../api/api"
+import { listBuckets, deleteBucket, listObjects, deleteObject, getDownloadUrl, getS3Stats, recordUserAction } from "../api/api"
 import { useTheme } from "../context/ThemeContext"
 import api from "../api/api"
 
@@ -114,11 +114,15 @@ export default function Storage() {
     if (!window.confirm("Delete bucket " + name + "? This will permanently delete all objects inside.")) return
     try {
       await deleteBucket(name, true)
+      recordUserAction({ cloud: "aws", action: "Delete Bucket", resource_type: "S3", resource: name, status: "success" }).catch(() => {})
       setSuccess("Bucket " + name + " deleted")
       if (selectedBucket?.name === name) { setSel(null); setObjects(null) }
       fetchBuckets()
       setTimeout(() => setSuccess(""), 3000)
-    } catch(e) { setError(e.response?.data?.detail || e.message) }
+    } catch(e) {
+      recordUserAction({ cloud: "aws", action: "Delete Bucket", resource_type: "S3", resource: name, status: "failed" }).catch(() => {})
+      setError(e.response?.data?.detail || e.message)
+    }
   }
 
   async function handleDeleteObject(key) {

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { useTheme } from "../context/ThemeContext"
 import api from "../api/api"
-import { getPipeline } from "../api/api"
+import { getPipeline, getRequestComments, addRequestComment } from "../api/api"
 
 /* ─── constants ──────────────────────────────────────────────────────── */
 const STATUS_COLORS = {
@@ -126,6 +126,12 @@ export default function Approvals() {
   const [success,    setSuccess]    = useState("")
   const [error,      setError]      = useState("")
 
+  /* ── discussion / comments state ────────────────────────────────── */
+  const [comments,     setComments]     = useState([])
+  const [commentText,  setCommentText]  = useState("")
+  const [commentSub,   setCommentSub]   = useState(false)
+  const commentBottomRef = useRef(null)
+
   /* ── inline pipeline state ───────────────────────────────────────── */
   const [pipelineReqId,  setPipelineReqId]  = useState(null)
   const [pipelineData,   setPipelineData]   = useState(null)
@@ -146,6 +152,42 @@ export default function Approvals() {
     const iv = setInterval(fetchRequests, 15000)
     return () => clearInterval(iv)
   }, [fetchRequests])
+
+  /* ── comment fetching ───────────────────────────────────────────── */
+  const fetchComments = useCallback(async (reqId) => {
+    try {
+      const { data } = await getRequestComments(reqId)
+      setComments(data)
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    if (!selected) { setComments([]); return }
+    fetchComments(selected.id)
+  }, [selected, fetchComments])
+
+  // Poll comments every 10 s when discussion tab is open
+  useEffect(() => {
+    if (!selected || activeTab !== "comments") return
+    const iv = setInterval(() => fetchComments(selected.id), 10000)
+    return () => clearInterval(iv)
+  }, [selected, activeTab, fetchComments])
+
+  // Scroll to bottom when new comments arrive
+  useEffect(() => {
+    if (activeTab === "comments") commentBottomRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [comments, activeTab])
+
+  async function submitComment() {
+    if (!commentText.trim() || !selected) return
+    setCommentSub(true)
+    try {
+      await addRequestComment(selected.id, commentText.trim())
+      setCommentText("")
+      await fetchComments(selected.id)
+    } catch { /* ignore */ }
+    finally { setCommentSub(false) }
+  }
 
   /* ── pipeline polling ────────────────────────────────────────────── */
   useEffect(() => {
@@ -191,6 +233,8 @@ export default function Approvals() {
       setTFPreview("")
       setPlanOut("")
       setActiveTab("details")
+      setComments([])
+      setCommentText("")
       api.get(`/terraform/${req.id}/preview`)
         .then(r => setTFPreview(r.data.content || ""))
         .catch(() => setTFPreview("Preview not available"))
@@ -570,14 +614,27 @@ export default function Approvals() {
 
             {/* tabs */}
             <div style={{ padding:"0 20px", borderBottom:"1px solid "+border, display:"flex", gap:"4px" }}>
-              {[["details","Details"],["tf","TF Config"],["plan","Plan Output"]].map(([id, label]) => (
+              {[
+                ["details",  "Details"],
+                ["comments", comments.length ? `Discussion (${comments.length})` : "Discussion"],
+                ["tf",       "TF Config"],
+                ["plan",     "Plan Output"],
+              ].map(([id, label]) => (
                 <button key={id} onClick={() => setActiveTab(id)} style={{
                   padding:"9px 14px", border:"none", fontSize:"12px", cursor:"pointer",
-                  background:"transparent", color:activeTab===id?"#3b82f6":muted,
-                  fontWeight:activeTab===id?"700":"400",
-                  borderBottom:`2px solid ${activeTab===id?"#3b82f6":"transparent"}`,
+                  background:"transparent",
+                  color: activeTab === id ? (id === "comments" ? "#a78bfa" : "#3b82f6") : muted,
+                  fontWeight: activeTab === id ? "700" : "400",
+                  borderBottom: `2px solid ${activeTab === id ? (id === "comments" ? "#a78bfa" : "#3b82f6") : "transparent"}`,
+                  position: "relative",
                 }}>
                   {label}
+                  {id === "comments" && comments.length > 0 && activeTab !== "comments" && (
+                    <span style={{
+                      position:"absolute", top:6, right:2,
+                      width:6, height:6, borderRadius:"50%", background:"#a78bfa",
+                    }} />
+                  )}
                 </button>
               ))}
             </div>
@@ -624,6 +681,92 @@ export default function Approvals() {
                 planOutput
                   ? <pre style={{ background:codeBg, border:"1px solid "+border, borderRadius:"8px", padding:"14px", fontSize:"11px", color:text, fontFamily:"monospace", overflowX:"auto", maxHeight:"380px", overflowY:"auto", margin:0, lineHeight:"1.6", whiteSpace:"pre-wrap" }}>{planOutput}</pre>
                   : <div style={{ padding:"40px", textAlign:"center", color:muted, fontSize:"13px" }}>No plan output yet</div>
+              )}
+
+              {activeTab === "comments" && (
+                <div style={{ display:"flex", flexDirection:"column", gap:0, minHeight:200 }}>
+                  {/* thread */}
+                  {comments.length === 0 ? (
+                    <div style={{ padding:"32px", textAlign:"center", color:muted, fontSize:"13px" }}>
+                      <div style={{ fontSize:28, marginBottom:10 }}>💬</div>
+                      No comments yet — start the discussion below.
+                    </div>
+                  ) : (
+                    <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:8 }}>
+                      {comments.map((c, i) => {
+                        const initials = (c.author || "?").slice(0,2).toUpperCase()
+                        const isMe = c.author === ((() => { try { return JSON.parse(localStorage.getItem("user") || "{}") } catch { return {} } })()).username
+                        const hue  = [...c.author].reduce((a,ch) => a + ch.charCodeAt(0), 0)
+                        const avatarColors = ["#4285F4","#00d4aa","#a78bfa","#f59e0b","#f43f5e","#06b6d4","#10b981"]
+                        const avatarBg = avatarColors[hue % avatarColors.length]
+                        return (
+                          <div key={c.id}
+                            style={{
+                              display:"flex", gap:10, alignItems:"flex-start",
+                              flexDirection: isMe ? "row-reverse" : "row",
+                            }}>
+                            {/* avatar */}
+                            <div style={{
+                              width:32, height:32, borderRadius:"50%", flexShrink:0,
+                              background: avatarBg,
+                              display:"flex", alignItems:"center", justifyContent:"center",
+                              fontSize:11, fontWeight:700, color:"#fff",
+                            }}>{initials}</div>
+                            {/* bubble */}
+                            <div style={{ maxWidth:"75%", minWidth:0 }}>
+                              <div style={{
+                                display:"flex", gap:8, alignItems:"baseline",
+                                flexDirection: isMe ? "row-reverse" : "row",
+                                marginBottom:4,
+                              }}>
+                                <span style={{ fontSize:12, fontWeight:700, color:text }}>{c.author}</span>
+                                <span style={{ fontSize:10, color:muted }}>{timeAgo(c.created_at)}</span>
+                              </div>
+                              <div style={{
+                                padding:"9px 13px", borderRadius: isMe ? "12px 4px 12px 12px" : "4px 12px 12px 12px",
+                                background: isMe
+                                  ? "rgba(167,139,250,0.15)"
+                                  : (dark ? "rgba(255,255,255,0.05)" : "#f1f5f9"),
+                                border: `1px solid ${isMe ? "rgba(167,139,250,0.3)" : border}`,
+                                fontSize:13, color:text, lineHeight:"1.55", wordBreak:"break-word",
+                                whiteSpace:"pre-wrap",
+                              }}>{c.text}</div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                      <div ref={commentBottomRef} />
+                    </div>
+                  )}
+
+                  {/* composer */}
+                  <div style={{ marginTop:"auto", paddingTop:12, borderTop:`1px solid ${border}` }}>
+                    <textarea
+                      value={commentText}
+                      onChange={e => setCommentText(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitComment() }}
+                      placeholder="Ask a question or leave a note… (Ctrl+Enter to send)"
+                      rows={3}
+                      style={{
+                        ...inp, resize:"vertical", fontFamily:"inherit",
+                        lineHeight:"1.5", marginBottom:8,
+                        borderColor: commentText.trim() ? "#a78bfa80" : undefined,
+                      }}
+                    />
+                    <button
+                      onClick={submitComment}
+                      disabled={!commentText.trim() || commentSub}
+                      style={{
+                        padding:"8px 20px", borderRadius:8, border:"none", fontSize:13,
+                        fontWeight:700, cursor: commentText.trim() && !commentSub ? "pointer" : "not-allowed",
+                        background: commentText.trim() ? "rgba(167,139,250,0.85)" : "rgba(167,139,250,0.3)",
+                        color:"#fff", transition:"background 0.15s",
+                      }}>
+                      {commentSub ? "Sending…" : "Add Comment"}
+                    </button>
+                    <span style={{ fontSize:11, color:muted, marginLeft:10 }}>Ctrl+Enter</span>
+                  </div>
+                </div>
               )}
             </div>
 

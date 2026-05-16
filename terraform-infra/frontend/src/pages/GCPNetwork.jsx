@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useNavigate } from "react-router-dom"
 import { useTheme } from "../context/ThemeContext"
 import { listGCPNetworks, listGCPSubnetworks } from "../api/api"
+import GCPProjectSelector from "../components/GCPProjectSelector"
 
 export default function GCPNetwork() {
   const { dark } = useTheme()
@@ -13,6 +14,9 @@ export default function GCPNetwork() {
   const text     = dark ? "#f1f5f9" : "#0f172a"
   const muted    = dark ? "#64748b" : "#64748b"
 
+  const [selProject,       setSelProject]     = useState(() => {
+    try { return JSON.parse(localStorage.getItem("gcp_selected_project") || "null") } catch { return null }
+  })
   const [networks,         setNetworks]       = useState([])
   const [selectedNetwork,  setSelected]       = useState(null)
   const [subnets,          setSubnets]        = useState([])
@@ -20,10 +24,12 @@ export default function GCPNetwork() {
   const [loadingSubs,      setLoadingSubs]    = useState(false)
   const [error,            setError]          = useState("")
 
-  useEffect(() => {
+  const loadNetworks = useCallback(() => {
     setLoading(true)
     setError("")
-    listGCPNetworks()
+    setSelected(null)
+    setSubnets([])
+    listGCPNetworks(selProject?.id || null)
       .then(r => {
         const list = r.data?.networks || []
         setNetworks(list)
@@ -31,16 +37,18 @@ export default function GCPNetwork() {
       })
       .catch(e => setError(e.response?.data?.detail || "Failed to load VPC networks"))
       .finally(() => setLoading(false))
-  }, [])
+  }, [selProject])
+
+  useEffect(() => { loadNetworks() }, [loadNetworks])
 
   useEffect(() => {
     if (!selectedNetwork) return
     setLoadingSubs(true)
-    listGCPSubnetworks({ network: selectedNetwork.name })
+    listGCPSubnetworks({ network: selectedNetwork.name, ...(selProject?.id ? { project: selProject.id } : {}) })
       .then(r => setSubnets(r.data?.subnetworks || []))
       .catch(() => setSubnets([]))
       .finally(() => setLoadingSubs(false))
-  }, [selectedNetwork])
+  }, [selectedNetwork, selProject])
 
   const thStyle = {
     padding: "9px 14px", fontSize: 11, fontWeight: 600, color: muted,
@@ -90,13 +98,20 @@ export default function GCPNetwork() {
           <div>
             <h1 style={{ fontSize: 18, fontWeight: 700, color: text, margin: 0 }}>GCP VPC Networks</h1>
             <p style={{ fontSize: 12, color: muted, margin: "2px 0 0" }}>
-              Virtual Private Cloud networks and subnets in your GCP project
+              {selProject ? `Project: ${selProject.name}` : "All accessible GCP projects"}
             </p>
           </div>
         </div>
 
-        <button
-          onClick={() => navigate("/gcp/network/create")}
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <GCPProjectSelector
+            value={selProject}
+            onChange={p => { setSelProject(p); setNetworks([]); setSubnets([]) }}
+            showLabel={false}
+            compact={true}
+          />
+          <button
+            onClick={() => navigate("/gcp/network/create")}
           style={{
             padding: "9px 18px", borderRadius: 9, border: "none", cursor: "pointer", fontWeight: 700,
             fontSize: 13, background: "linear-gradient(135deg,#4285f4,#34a853)", color: "#fff",
@@ -110,7 +125,8 @@ export default function GCPNetwork() {
             <path d="M12 4v16m8-8H4"/>
           </svg>
           Create VPC Network
-        </button>
+          </button>
+        </div>
       </div>
 
       {error && (

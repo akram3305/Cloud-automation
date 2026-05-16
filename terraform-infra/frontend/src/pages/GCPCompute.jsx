@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import { useNavigate } from "react-router-dom"
 import { useTheme } from "../context/ThemeContext"
 import {
@@ -6,8 +6,12 @@ import {
   getGCPInstanceConnectInfo, getGCPInstanceSchedule, setGCPInstanceSchedule,
   getGCPInstanceFirewall, updateGCPInstanceFirewall,
   getGCPInstanceSSHKey, fixGCPInstanceSSHKey, regenerateGCPSSHKey,
+  recordUserAction,
 } from "../api/api"
 import ResourceBudgetModal from "../components/ResourceBudgetModal"
+import GCPProjectSelector from "../components/GCPProjectSelector"
+import SSHTerminalModal from "../components/SSHTerminalModal"
+import { usePinnedResources } from "../components/PinnedResources"
 
 function SvgIcon({ d, size = 16, color = "currentColor" }) {
   return (
@@ -660,6 +664,9 @@ export default function GCPCompute() {
   const { dark } = useTheme()
   const navigate  = useNavigate()
 
+  const [selProject,   setSelProject]   = useState(() => {
+    try { return JSON.parse(localStorage.getItem("gcp_selected_project") || "null") } catch { return null }
+  })
   const [instances,   setInstances]   = useState([])
   const [costData,    setCostData]    = useState(null)
   const [loading,     setLoading]     = useState(false)
@@ -673,6 +680,8 @@ export default function GCPCompute() {
   const [scheduleInst, setScheduleInst] = useState(null)
   const [firewallInst, setFirewallInst] = useState(null)
   const [budgetInst,   setBudgetInst]   = useState(null)
+  const [termInst,     setTermInst]     = useState(null)
+  const { isPinned, toggle: togglePin } = usePinnedResources()
 
   // ── theme tokens ─────────────────────────────────────────────────────────
   const bg     = dark ? "#070c18"                      : "#f0f4f8"
@@ -700,11 +709,12 @@ export default function GCPCompute() {
     return m
   }, [costData])
 
-  const load = () => {
+  const load = useCallback(() => {
+    const pid = selProject?.id || null
     setLoading(true); setError("")
     Promise.all([
-      listGCPInstances().catch(() => ({ data:{ instances:[] } })),
-      getGCPCost().catch(() => ({ data: null })),
+      listGCPInstances(pid).catch(() => ({ data:{ instances:[] } })),
+      getGCPCost(pid).catch(() => ({ data: null })),
     ]).then(([inst, cost]) => {
       setInstances(inst.data?.instances || [])
       setCostData(cost.data)
@@ -713,9 +723,9 @@ export default function GCPCompute() {
       setInstances([])
       setError(e.response?.data?.detail || "GCP not configured yet")
     }).finally(() => setLoading(false))
-  }
+  }, [selProject])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [load])
 
   const doAction = async (fn, name, zone, label) => {
     setActioning(a => ({ ...a, [name]: label }))
@@ -723,10 +733,14 @@ export default function GCPCompute() {
     try {
       await fn(name, zone)
       setNotice(`${label[0].toUpperCase()}${label.slice(1)} request submitted for ${name}.`)
+      recordUserAction({ cloud: "gcp", action: `Instance ${label}`, resource_type: "Compute", resource: name, detail: zone, status: "success" }).catch(() => {})
       load()
       setTimeout(() => setNotice(""), 3200)
     }
-    catch (e) { setError(e.response?.data?.detail || `Failed to ${label} instance`) }
+    catch (e) {
+      recordUserAction({ cloud: "gcp", action: `Instance ${label}`, resource_type: "Compute", resource: name, detail: zone, status: "failed" }).catch(() => {})
+      setError(e.response?.data?.detail || `Failed to ${label} instance`)
+    }
     finally { setActioning(a => { const n = {...a}; delete n[name]; return n }) }
   }
 
@@ -772,12 +786,18 @@ export default function GCPCompute() {
           <div>
             <h1 style={{ margin:0, fontSize:21, fontWeight:800, letterSpacing:"-0.3px" }}>Compute Engine</h1>
             <p style={{ margin:"2px 0 0", fontSize:12, color:muted }}>
-              Virtual machine instances across all GCP zones
+              {selProject ? `Project: ${selProject.name}` : "All accessible GCP projects"}
               {lastRefresh && <span style={{ marginLeft:8, color:dark?"#334155":"#cbd5e1" }}>· Updated {lastRefresh.toLocaleTimeString()}</span>}
             </p>
           </div>
         </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+        <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+          <GCPProjectSelector
+            value={selProject}
+            onChange={p => { setSelProject(p); setInstances([]); setSearch("") }}
+            showLabel={false}
+            compact={true}
+          />
           <button onClick={load} disabled={loading}
             style={{ display:"flex", alignItems:"center", gap:6, padding:"8px 14px", borderRadius:9,
               background:card, border:`1px solid ${border}`, color:txt, fontSize:12,
@@ -1024,10 +1044,22 @@ export default function GCPCompute() {
                               disabled={!!acting}
                               color="#f59e0b" bg="rgba(245,158,11,0.15)" />
                           )}
+                          <button
+                            onClick={() => togglePin({ id:`gcp-vm-${inst.name}`, name:inst.name, type:"GCP VM", cloud:"gcp", status:inst.status, link:"/gcp/compute", meta:inst.machine_type || "" })}
+                            title={isPinned(`gcp-vm-${inst.name}`) ? "Unpin" : "Pin to My Resources"}
+                            style={{ padding:"5px 8px", borderRadius:6, fontSize:13, cursor:"pointer", border:`1px solid ${isPinned(`gcp-vm-${inst.name}`) ? "#fbbf2440" : "rgba(100,116,139,0.25)"}`, background:isPinned(`gcp-vm-${inst.name}`) ? "rgba(251,191,36,0.12)" : "transparent", color:isPinned(`gcp-vm-${inst.name}`) ? "#fbbf24" : "#64748b" }}>
+                            {isPinned(`gcp-vm-${inst.name}`) ? "★" : "☆"}
+                          </button>
                           <ActionBtn label="Connect"
                             onClick={() => setConnectInst(inst)}
                             disabled={!!acting}
                             color="#50e6ff" bg="rgba(80,230,255,0.15)" />
+                          {inst.status === "RUNNING" && (
+                            <ActionBtn label="Terminal"
+                              onClick={() => setTermInst(inst)}
+                              disabled={!!acting}
+                              color="#a78bfa" bg="rgba(167,139,250,0.15)" />
+                          )}
                           <ActionBtn label={(inst.labels?.auto_start || inst.labels?.auto_stop) ? "Manage Schedule" : "Schedule"}
                             onClick={() => setScheduleInst(inst)}
                             disabled={!!acting}
@@ -1096,6 +1128,16 @@ export default function GCPCompute() {
         <ResourceBudgetModal
           resource={{ vm_id: budgetInst.name, vm_name: budgetInst.name, cloud: "gcp", region: budgetInst.zone, instance_type: budgetInst.machine_type }}
           onClose={() => setBudgetInst(null)}
+        />
+      )}
+
+      {termInst && (
+        <SSHTerminalModal
+          vmName={termInst.name}
+          host={termInst.network_interfaces?.[0]?.external_ip || termInst.network_interfaces?.[0]?.internal_ip || ""}
+          cloud="gcp"
+          dark={dark}
+          onClose={() => setTermInst(null)}
         />
       )}
     </div>

@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useNavigate } from "react-router-dom"
 import { useTheme } from "../context/ThemeContext"
 import { listGCPBuckets } from "../api/api"
+import GCPProjectSelector from "../components/GCPProjectSelector"
 
 const CLASS_COLORS = {
   STANDARD: { bg: "rgba(66,133,244,0.12)", color: "#4285f4", border: "rgba(66,133,244,0.3)" },
@@ -28,6 +29,9 @@ export default function GCPStorage() {
   const text     = dark ? "#f1f5f9" : "#0f172a"
   const muted    = dark ? "#64748b" : "#64748b"
 
+  const [selProject,   setSelProject]   = useState(() => {
+    try { return JSON.parse(localStorage.getItem("gcp_selected_project") || "null") } catch { return null }
+  })
   const [buckets,      setBuckets]      = useState([])
   const [loading,      setLoading]      = useState(false)
   const [error,        setError]        = useState("")
@@ -35,19 +39,24 @@ export default function GCPStorage() {
   const [warningType,  setWarningType]  = useState("")
   const [search,       setSearch]       = useState("")
 
-  useEffect(() => {
+  const load = useCallback(() => {
     setLoading(true)
-    listGCPBuckets()
+    setError("")
+    listGCPBuckets(selProject?.id || null)
       .then(r => {
         setBuckets(r.data?.buckets || [])
         if (r.data?.warning) {
           setWarning(r.data.warning)
           setWarningType(r.data.warning_type || "")
+        } else {
+          setWarning("")
         }
       })
       .catch(e => setError(e.response?.data?.detail || "Failed to load buckets"))
       .finally(() => setLoading(false))
-  }, [])
+  }, [selProject])
+
+  useEffect(() => { load() }, [load])
 
   const filtered = buckets.filter(b =>
     !search || b.name?.toLowerCase().includes(search.toLowerCase()) || b.location?.toLowerCase().includes(search.toLowerCase())
@@ -79,13 +88,19 @@ export default function GCPStorage() {
           <div>
             <h1 style={{ fontSize: 18, fontWeight: 700, color: text, margin: 0 }}>GCP Cloud Storage</h1>
             <p style={{ fontSize: 12, color: muted, margin: "2px 0 0" }}>
-              Object storage buckets in your GCP project
+              {selProject ? `Project: ${selProject.name}` : "All accessible GCP projects"}
               {buckets.length > 0 && ` — ${buckets.length} bucket${buckets.length !== 1 ? "s" : ""}`}
             </p>
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <GCPProjectSelector
+            value={selProject}
+            onChange={p => { setSelProject(p); setBuckets([]) }}
+            showLabel={false}
+            compact={true}
+          />
           <input
             style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${border}`, background: dark ? "rgba(255,255,255,0.04)" : "#fff", color: text, fontSize: 13, outline: "none", width: 200 }}
             placeholder="Search buckets…"

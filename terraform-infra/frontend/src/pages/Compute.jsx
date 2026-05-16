@@ -3,10 +3,12 @@ import { useLocation } from "react-router-dom"
 import { listVMs, startVM, stopVM, deleteVM } from "../api/api"
 import CreateVMModal from "../components/CreateVMModal"
 import EC2ConnectionInfo from "../components/EC2ConnectionInfo"
+import SSHTerminalModal from "../components/SSHTerminalModal"
 import { useTheme } from "../context/ThemeContext"
 import ScheduleModal from "../components/ScheduleModal"
 import ResourceGuide, { ScheduleGuide } from "../components/HowToGuide"
 import ResourceBudgetModal from "../components/ResourceBudgetModal"
+import { usePinnedResources } from "../components/PinnedResources"
 
 const STATE = {
   running:  { bg:"#dcfce7", color:"#15803d", dot:"#16a34a", darkBg:"#14532d20", darkColor:"#4ade80" },
@@ -43,12 +45,14 @@ function EnvBadge({ env }) {
 export default function Compute() {
   const { dark }   = useTheme()
   const { state: routeState } = useLocation()
+  const { isPinned, toggle: togglePin } = usePinnedResources()
   const [vms,       setVms]       = useState([])
   const [loading,   setLoading]   = useState(true)
   const [showModal, setShowModal] = useState(!!routeState?.openCreate)
   const [schedVM,   setSchedVM]   = useState(null)
   const [connVM,    setConnVM]    = useState(null)
   const [budgetVM,  setBudgetVM]  = useState(null)
+  const [termVM,    setTermVM]    = useState(null)
   const [success,   setSuccess]   = useState("")
   const [actionId,  setActionId]  = useState(null)
   const [envFilter, setEnvFilter] = useState("all")
@@ -263,7 +267,16 @@ export default function Compute() {
                           {actionId===vm.id?"...":"Stop"}
                         </button>
                       )}
+                      <button
+                        onClick={() => togglePin({ id:`aws-ec2-${vm.id}`, name:vm.name, type:"EC2 Instance", cloud:"aws", status:vm.state, link:"/compute", meta:`${vm.instance_type} · ${vm.region}` })}
+                        title={isPinned(`aws-ec2-${vm.id}`) ? "Unpin" : "Pin to My Resources"}
+                        style={{ padding:"5px 8px", borderRadius:"6px", fontSize:"13px", cursor:"pointer", border:`1px solid ${isPinned(`aws-ec2-${vm.id}`) ? "#fbbf2440" : "#64748b30"}`, background:isPinned(`aws-ec2-${vm.id}`) ? "rgba(251,191,36,0.12)" : "transparent", color:isPinned(`aws-ec2-${vm.id}`) ? "#fbbf24" : "#64748b" }}>
+                        {isPinned(`aws-ec2-${vm.id}`) ? "★" : "☆"}
+                      </button>
                       <button onClick={()=>setConnVM(vm)} style={{ padding:"5px 12px", borderRadius:"6px", fontSize:"12px", cursor:"pointer", border:"1px solid #00d4aa40", background:"#00d4aa15", color:"#00d4aa" }}>Connect</button>
+                      {vm.state === "running" && vm.public_ip && (
+                        <button onClick={()=>setTermVM(vm)} style={{ padding:"5px 12px", borderRadius:"6px", fontSize:"12px", cursor:"pointer", border:"1px solid #a78bfa40", background:"#a78bfa15", color:"#a78bfa" }}>Terminal</button>
+                      )}
                       {!isViewer && (
                         <button onClick={()=>setSchedVM(vm)} style={{ padding:"5px 12px", borderRadius:"6px", fontSize:"12px", cursor:"pointer", border:"1px solid #3b82f640", background:"#3b82f615", color:"#3b82f6" }}>
                           {(vm.auto_start||vm.auto_stop)?"Scheduled":"Schedule"}
@@ -284,6 +297,15 @@ export default function Compute() {
       </div>
 
       {connVM && <EC2ConnectionInfo vm={connVM} onClose={()=>setConnVM(null)} />}
+      {termVM && (
+        <SSHTerminalModal
+          vmName={termVM.name}
+          host={termVM.public_ip || ""}
+          cloud="aws"
+          dark={dark}
+          onClose={() => setTermVM(null)}
+        />
+      )}
       {schedVM && <ScheduleModal vm={schedVM} onClose={()=>setSchedVM(null)} onSaved={()=>{setSchedVM(null);fetchVMs()}} />}
       {showModal && <CreateVMModal prefill={routeState?.prefill} onClose={()=>setShowModal(false)} onSuccess={()=>{ setShowModal(false); setSuccess("Request submitted - awaiting admin approval"); fetchVMs(); setTimeout(()=>setSuccess(""),4000) }} />}
       {budgetVM && (

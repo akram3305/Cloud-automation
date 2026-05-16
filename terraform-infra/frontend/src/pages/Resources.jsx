@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { useTheme } from "../context/ThemeContext"
-import { listRequests, listVMs, listBuckets, deleteBucket, startVM, stopVM, listVPCs, listLambdas, listLoadBalancers } from "../api/api"
+import { listRequests, listVMs, listBuckets, deleteBucket, startVM, stopVM, listVPCs, listLambdas, listLoadBalancers, recordUserAction } from "../api/api"
 import api from "../api/api"
 import CreateVMModal from "../components/CreateVMModal"
 import ScheduleModal from "../components/ScheduleModal"
@@ -149,8 +149,8 @@ export default function Resources() {
   }
   function lockSection(type,e){e.stopPropagation();setExpanded(p=>({...p,[type]:false}));setRevealed(p=>({...p,[type]:false}))}
 
-  async function handleStart(vm){setActionId(vm.id+"-start");try{await startVM(vm.id);fetchAll()}catch(e){alert(e.message)}finally{setActionId(null)}}
-  async function handleStop(vm){setActionId(vm.id+"-stop");try{await stopVM(vm.id);fetchAll()}catch(e){alert(e.message)}finally{setActionId(null)}}
+  async function handleStart(vm){setActionId(vm.id+"-start");try{await startVM(vm.id);recordUserAction({cloud:"aws",action:"Instance start",resource_type:"EC2",resource:vm.name||vm.instance_id,status:"success"}).catch(()=>{});fetchAll()}catch(e){recordUserAction({cloud:"aws",action:"Instance start",resource_type:"EC2",resource:vm.name||vm.instance_id,status:"failed"}).catch(()=>{});alert(e.message)}finally{setActionId(null)}}
+  async function handleStop(vm){setActionId(vm.id+"-stop");try{await stopVM(vm.id);recordUserAction({cloud:"aws",action:"Instance stop",resource_type:"EC2",resource:vm.name||vm.instance_id,status:"success"}).catch(()=>{});fetchAll()}catch(e){recordUserAction({cloud:"aws",action:"Instance stop",resource_type:"EC2",resource:vm.name||vm.instance_id,status:"failed"}).catch(()=>{});alert(e.message)}finally{setActionId(null)}}
   async function handleDeleteBucket(name){if(!window.confirm("Delete bucket "+name+"?"))return;try{await deleteBucket(name,true);setSuccess("Deleted "+name);fetchAll();setTimeout(()=>setSuccess(""),3000)}catch(e){alert(e.message)}}
 
   async function handleS3Create(){

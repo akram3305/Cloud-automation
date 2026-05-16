@@ -2,6 +2,7 @@ import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useTheme } from "../context/ThemeContext"
 import { createRequest } from "../api/api"
+import GCPProjectSelector from "../components/GCPProjectSelector"
 
 // ── GCP regions for storage ──────────────────────────────────────────────────
 const REGIONS = {
@@ -56,6 +57,9 @@ export default function GCPStorageCreate() {
   const muted    = dark ? "#64748b" : "#64748b"
   const panel    = dark ? "rgba(255,255,255,0.03)" : "#f8fafc"
 
+  const [selProject, setSelProject] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("gcp_selected_project") || "null") } catch { return null }
+  })
   const [step, setStep] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
@@ -129,6 +133,7 @@ export default function GCPStorageCreate() {
         cloud_provider: "gcp",
         region,
         payload: {
+          project_id:                selProject?.id || "",
           bucket_name:               bucketName,
           region,
           location_type:             locationType.toUpperCase().replace("-", "_"),
@@ -234,6 +239,9 @@ export default function GCPStorageCreate() {
         <div>
           <h1 style={{ fontSize: 17, fontWeight: 700, color: text, margin: 0 }}>Create Cloud Storage Bucket</h1>
           <p style={{ fontSize: 11, color: muted, margin: 0 }}>Step {step + 1} of {STEPS.length} — {STEPS[step]}</p>
+        </div>
+        <div style={{ marginLeft: "auto" }}>
+          <GCPProjectSelector value={selProject} onChange={p => { setSelProject(p); if (p) localStorage.setItem("gcp_selected_project", JSON.stringify(p)); else localStorage.removeItem("gcp_selected_project") }} showLabel={false} compact={true} />
         </div>
       </div>
 

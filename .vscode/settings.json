@@ -1,4 +1,6 @@
 {
-    "python-envs.defaultEnvManager": "ms-python.python:system",
+    "python-envs.defaultEnvManager": "ms-python.python:local",
+    "python.defaultInterpreterPath": "${workspaceFolder}/terraform-infra/backend/venv/Scripts/python.exe",
+    "python.terminal.activateEnvironment": true,
     "python.terminal.useEnvFile": true
 }
